@@ -3,15 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Fly With Me</title>
+    <title>The Long Ride</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%232b3050%27/%3E%3Cpath d=%27M8 38 L28 26 L32 32 L36 26 L56 38 L34 34 L32 40 L30 34 Z%27 fill=%27%23f3c2a0%27/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23f4ebdd%27/%3E%3Cg fill=%27none%27 stroke=%27%231b1712%27 stroke-width=%275%27%3E%3Ccircle cx=%2717%27 cy=%2741%27 r=%278%27/%3E%3Ccircle cx=%2747%27 cy=%2741%27 r=%278%27/%3E%3C/g%3E%3Cpath d=%27M8 22 L26 26 L30 32 L18 31 Z M27 28 Q36 18 47 24 L51 32 L29 33 Z%27 fill=%27%23c8673d%27/%3E%3C/svg%3E"
     />
     <meta
       name="description"
-      content="A bird crossing an endless procedural world, above and below the clouds. Soft illustrated light, calm, generated fresh every time."
+      content="The Long Ride by Niño Redoble: a motorcycle riding forever through a procedurally generated Northern Mindanao, coast, rice terraces, pineapple fields and highland pines, from dawn to starlight."
     />
+    <meta property="og:title" content="The Long Ride" />
+    <meta property="og:description" content="A motorcycle riding forever through a procedurally generated Northern Mindanao. By Niño Redoble." />
+    <meta name="author" content="Niño Redoble" />
+    <meta name="theme-color" content="#1b1712" />
     <style>
       html,
       body {
@@ -330,8 +334,7 @@
       #hud[inert] {
         visibility: hidden;
       }
-      /* The perch: the bird chooser, two strips above the controls line - the
-         kinds' shapes over the chosen kind's colors. */
+      /* The paint chooser: one strip above the controls line. */
       #perch {
         position: fixed;
         left: max(1rem, env(safe-area-inset-left));
@@ -381,7 +384,7 @@
         white-space: nowrap;
       }
       /* An overflowing strip fades at the end it can still be scrolled toward,
-         so what is out of sight reads as more birds rather than an edge. */
+         so what is out of sight reads as more paints rather than an edge. */
       .perchStrip {
         --fadeStart: #000;
         --fadeEnd: #000;
@@ -451,14 +454,14 @@
         width: 100%;
         filter: drop-shadow(0 1px 2px rgba(8, 18, 26, 0.5));
       }
-      #perchKinds .tile {
-        width: 104px;
+      #perchPaints .tile {
+        width: 92px;
         padding-bottom: 0.2rem;
       }
-      #perchKinds .tile svg {
-        height: 54px;
+      #perchPaints .tile svg {
+        height: 46px;
       }
-      #perchKinds .tile .name {
+      #perchPaints .tile .name {
         display: block;
         margin-top: 0.12rem;
         font-size: 0.66rem;
@@ -466,17 +469,8 @@
         text-align: center;
         color: rgba(246, 242, 234, 0.82);
       }
-      #perchKinds .tile[aria-pressed='true'] .name {
+      #perchPaints .tile[aria-pressed='true'] .name {
         color: #f6f2ea;
-      }
-      #perchPlumages .tile {
-        width: 66px;
-      }
-      #perchPlumages .tile svg {
-        height: 38px;
-      }
-      #perchPlumages .tile.own {
-        margin-right: 0.35rem;
       }
       :focus-visible {
         outline: 2px solid #f1e5b8;
@@ -536,62 +530,58 @@
       inert
       tabindex="0"
       role="img"
-      aria-label="An autonomous bird flight. Left-drag looks around, right-drag steers, arrow keys nudge; space pauses or resumes."
+      aria-label="A motorcycle riding itself through Northern Mindanao. Left-drag looks around, right-drag steers, arrow keys nudge a turn, C changes the camera; space pauses or resumes."
     ></canvas>
     <div id="title" aria-hidden="true">
-      <p id="titlePresents">Kun Chen Presents</p>
-      <p id="titleName">Fly With Me</p>
+      <p id="titlePresents">Niño Redoble presents</p>
+      <p id="titleName">The Long Ride</p>
     </div>
     <div id="begin">
       <button id="beginBtn" disabled>begin</button>
       <p class="hint">
-        <span>A bird crossing an endless world. It flies itself; there is nothing to do.</span>
-        <span class="mouse">Left-drag looks around &middot; right-drag steers &middot; the wheel zooms &middot; space pauses</span>
-        <span class="touch">Drag to steer</span>
+        <span>A road through Northern Mindanao that never ends. The bike rides itself; there is nothing to do.</span>
+        <span class="mouse">Left-drag looks around &middot; right-drag steers &middot; the wheel zooms &middot; C changes the camera &middot; space pauses</span>
+        <span class="touch">Drag to steer &middot; let go and it finds the road again</span>
       </p>
     </div>
     <div id="loading">
-      <p id="loadingText" role="status">waking the world</p>
+      <p id="loadingText" role="status">warming the engine</p>
       <a id="retryLink" hidden>try WebGL2</a>
-      <noscript>JavaScript is needed to create this world.</noscript>
+      <noscript>JavaScript is needed to make this road.</noscript>
     </div>
-    <div id="perch" inert role="group" aria-label="Choose a bird">
+    <div id="perch" inert role="group" aria-label="Choose a paint">
       <div class="perchRow">
-        <span class="perchLabel" id="perchKindsLabel">shape</span>
-        <div class="perchStrip" id="perchKinds" role="group" aria-labelledby="perchKindsLabel"></div>
-        <div class="perchRail" aria-hidden="true"><div></div></div>
-      </div>
-      <div class="perchRow">
-        <span class="perchLabel" id="perchPlumagesLabel">colors</span>
-        <div class="perchStrip" id="perchPlumages" role="group" aria-labelledby="perchPlumagesLabel"></div>
+        <span class="perchLabel" id="perchPaintsLabel">paint</span>
+        <div class="perchStrip" id="perchPaints" role="group" aria-labelledby="perchPaintsLabel"></div>
         <div class="perchRail" aria-hidden="true"><div></div></div>
       </div>
     </div>
     <div id="hud" inert>
-      <a id="shareLink" href="#" title="A link to this exact world">share this world</a>
+      <a id="shareLink" href="#" title="A link to this exact road">share this road</a>
       <button id="muteBtn" aria-label="Mute sound" title="Toggle sound" aria-pressed="false">sound on</button>
       <input id="volume" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="Volume" title="Volume" />
-      <button id="pauseBtn" aria-label="Pause flight" title="Pause flight" aria-pressed="false" disabled>
+      <button id="pauseBtn" aria-label="Pause ride" title="Pause ride" aria-pressed="false" disabled>
         pause
       </button>
-      <button id="birdBtn" aria-label="Change the bird" title="Fly as another bird" aria-expanded="false" aria-controls="perch">bird: gull</button>
+      <button id="viewBtn" aria-label="Change the camera" title="Change the camera (C)">camera: chase</button>
+      <button id="paintBtn" aria-label="Change the paint" title="Repaint the bike" aria-expanded="false" aria-controls="perch">paint: ink</button>
       <span id="backendLabel" class="dim"></span>
     </div>
 
     <script>
       // This also catches import failures, before the module can install its lifecycle.
-      window.flightFailure = () => {
-        if (window.flightFailed) return;
-        window.flightFailed = true;
-        window.__fly?.dispose?.();
+      window.rideFailure = () => {
+        if (window.rideFailed) return;
+        window.rideFailed = true;
+        window.__ride?.dispose?.();
         const veil = document.getElementById('loading');
         veil.classList.remove('gone');
         veil.classList.add('failed');
         for (const id of ['begin', 'hud', 'c']) document.getElementById(id).inert = true;
         document.getElementById('begin').classList.add('gone');
-        document.getElementById('loadingText').textContent = window.__fly
-          ? 'The view was interrupted. Try starting it again.'
-          : 'The view could not start. Check your connection or try again.';
+        document.getElementById('loadingText').textContent = window.__ride
+          ? 'The ride was interrupted. Try starting it again.'
+          : 'The ride could not start. Check your connection or try again.';
         const link = document.getElementById('retryLink'),
           url = new URL(location.href);
         link.textContent = url.searchParams.get('webgl') === '1' ? 'restart view' : 'try WebGL2';
@@ -599,12 +589,12 @@
         link.href = url;
         link.hidden = false;
       };
-      addEventListener('error', window.flightFailure, true);
+      addEventListener('error', window.rideFailure, true);
       setTimeout(() => {
-        if (!window.__fly && !window.flightFailed)
-          document.getElementById('loadingText').textContent = 'still waking. this page needs a connection';
+        if (!window.__ride && !window.rideFailed)
+          document.getElementById('loadingText').textContent = 'still warming up. this page needs a connection';
       }, 20000);
-      addEventListener('unhandledrejection', window.flightFailure);
+      addEventListener('unhandledrejection', window.rideFailure);
     </script>
     <script>
       (() => {
