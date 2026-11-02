@@ -175,9 +175,9 @@ export function createWorld(seed) {
 // its grass, its rocks and its sites. Each biome is a soft cell in climate
 // space; sharpening keeps most ground inside one biome with bands of a few
 // hundred meters between them, so borders never seam and never smear.
-export const CLIMATE_STRETCH = 2.2,
-  CLIMATE_RADIUS = 0.12,
-  CLIMATE_SHARPNESS = 2.2;
+export const CLIMATE_STRETCH = 2.2;
+export const CLIMATE_RADIUS = 0.12;
+export const CLIMATE_SHARPNESS = 2.2;
 export const climateAxis = (v) => Math.min(1, Math.max(0, (v - 0.5) * CLIMATE_STRETCH + 0.5));
 export function biomeWeights(biomes, temp, moist, region, out = new Float32Array(biomes.length)) {
   const t = climateAxis(temp),

@@ -284,6 +284,7 @@ const L = {
   ],
   terrain: {
     sand: 0xc5bc85,
+    snow: 0xe1e5d2, // the surf line on the shore
     seaFloor: 0x6d9988,
     waterDeep: 0x286e7b,
     waterShallow: 0x74b9a9,
@@ -998,11 +999,11 @@ let terrainMat;
   const across = positionWorld.x.sub(centre).div(sqrt(tangent.mul(tangent).add(1))),
     side = abs(across);
   const aa = max(float(0.06), distance.mul(0.0016));
-  const asphalt = float(1).sub(smoothstep(ROAD.half - aa, ROAD.half + aa, side));
+  const asphalt = float(1).sub(smoothstep(aa.negate().add(ROAD.half), aa.add(ROAD.half), side));
   const shoulder = float(1).sub(smoothstep(ROAD.shoulder - 0.6, ROAD.shoulder + 0.8, side));
   const lineFade = float(1).sub(smoothstep(90, 320, distance));
-  const edgeLine = smoothstep(ROAD.half - 0.5 - aa, ROAD.half - 0.5, side).mul(float(1).sub(smoothstep(ROAD.half - 0.32, ROAD.half - 0.32 + aa, side)));
-  const dash = step(fract(positionWorld.z.div(ROAD_PAINT.dash * 2)), 0.5).mul(float(1).sub(smoothstep(0.07, 0.07 + aa, side)));
+  const edgeLine = smoothstep(aa.negate().add(ROAD.half - 0.5), ROAD.half - 0.5, side).mul(float(1).sub(smoothstep(ROAD.half - 0.32, aa.add(ROAD.half - 0.32), side)));
+  const dash = step(fract(positionWorld.z.div(ROAD_PAINT.dash * 2)), 0.5).mul(float(1).sub(smoothstep(0.07, aa.add(0.07), side)));
   const patches = smoothstep(0.35, 0.6, mx_noise_float(xz.mul(0.09))).mul(0.6);
   let surface = mix(ROAD_PAINT.asphalt, ROAD_PAINT.patch, patches);
   surface = mix(surface, ROAD_PAINT.line, edgeLine.max(dash).mul(lineFade).mul(0.9));
@@ -3626,6 +3627,8 @@ window.__ride = {
   step: (dt) => advance(dt, false),
   capture,
   lite: LITE,
+  world,
+  biomeWeights,
   road,
   ride: RIDE,
   roadSpec: ROAD,

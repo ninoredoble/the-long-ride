@@ -6,7 +6,7 @@ import { defineBird } from '../contract.js';
 export default defineBird({
   id: 'egret',
   name: 'egret',
-  colors: { body: 0xeeeee6, wing: 0xe9e9e0, hand: 0xe2e2d8, tip: 0xdcdcd0, neck: 0xeeeee6, cap: 0xe8d6a8, beak: 0xd4a73e, legs: 0x3a3532 },
+  colors: { body: 0xeeeee6, wing: 0xe9e9e0, hand: 0xe2e2d8, tip: 0xdcdcd0, neck: 0xeeeee6, cap: 0xe8d6a8, beak: 0xcfa851, legs: 0x3a3532 },
   scale: 0.55,
   body: { r: 0.42, at: [0, 0, 0], scale: [1.0, 0.9, 2.0] },
   neck: { from: [0, 0.18, 0.75], to: [0, 0.42, 1.55], r0: 0.18, r1: 0.12, arch: 0.22, color: 'neck' },
