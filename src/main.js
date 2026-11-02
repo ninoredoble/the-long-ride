@@ -486,6 +486,13 @@ document.getElementById('backendLabel').textContent = renderer.backend.isWebGPUB
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 14000);
+// A tall phone keeps the horizontal view a landscape screen has: the bike and
+// the bends ahead stay in frame instead of a road filling the glass.
+function fitFov() {
+  const wide = 2 * Math.atan(Math.tan((62 * Math.PI) / 360) / Math.max(0.01, camera.aspect));
+  camera.fov = Math.min(84, Math.max(55, (wide * 180) / Math.PI));
+}
+fitFov();
 const sun = new THREE.DirectionalLight(0xffffff, 2.0);
 const hemi = new THREE.HemisphereLight(0xa9c8e6, 0x8a8f78, 1.0);
 scene.add(sun, sun.target, hemi);
@@ -834,7 +841,7 @@ const K = (hex) => {
 const ROAD_PAINT = {
   asphalt: K(0x5f5d58),
   patch: K(0x4f4e4b),
-  gravel: K(0xa39883),
+  gravel: K(0x948b78),
   line: K(0xe6e0d0),
   dash: 9, // meters of dash and gap along z
   lamp: K(0xffe2a8),
@@ -928,6 +935,14 @@ let terrainMat;
   // Planted rows run their own way in each field, on red earth, some fields
   // cleared. Fine lines fade with distance before they could shimmer, leaving
   // the patchwork.
+  const fz = wz.div(CELL),
+    rz = fz.floor(),
+    r0 = loadRoad(rz),
+    r1 = loadRoad(rz.add(1));
+  const centre = mix(r0.x, r1.x, fract(fz)),
+    tangent = r0.y.div(CELL);
+  const across = positionWorld.x.sub(centre).div(sqrt(tangent.mul(tangent).add(1))),
+    side = abs(across);
   const near = float(1).sub(smoothstep(140, 700, distance));
   const terraces = (() => {
     const wobble = mx_noise_float(xz.mul(0.012)).mul(0.7);
@@ -971,7 +986,7 @@ let terrainMat;
         const water = mix(u.field, uHorizon, 0.3);
         own = mix(mix(u.base, u.alt, terraces.gold), water, terraces.flooded);
         own = mix(own, u.base.mul(0.78), terraces.bund);
-      } else if (pattern === 'rows') own = mix(own, u.field, rows);
+      } else if (pattern === 'rows') own = mix(own, u.field, rows.mul(0.6));
       ground.addAssign(own.mul(w));
       rock.addAssign(u.rock.mul(w));
       total.addAssign(w);
@@ -979,7 +994,8 @@ let terrainMat;
     ground.divAssign(total);
     rock.divAssign(total);
     ground.assign(mix(palette.seaFloor, ground, smoothstep(-10.0, 0.5, h)));
-    ground.assign(mix(ground, rock, smoothstep(0.3, 0.52, slope)));
+    // the cut that carves the road is not a cliff: no bare rock within its bank
+    ground.assign(mix(ground, rock, smoothstep(0.3, 0.52, slope).mul(smoothstep(ROAD.bank * 0.5, ROAD.bank, side))));
     return stylize(ground);
   })();
   const brush = mx_noise_float(xz.mul(0.018))
@@ -990,14 +1006,6 @@ let terrainMat;
   // between them exactly as road.x does, the distance across it measured
   // square to the road, asphalt, gravel shoulders, edge lines and a dashed
   // centre line. The ground under it is the carved bench, so it lies flat.
-  const fz = wz.div(CELL),
-    rz = fz.floor(),
-    r0 = loadRoad(rz),
-    r1 = loadRoad(rz.add(1));
-  const centre = mix(r0.x, r1.x, fract(fz)),
-    tangent = r0.y.div(CELL);
-  const across = positionWorld.x.sub(centre).div(sqrt(tangent.mul(tangent).add(1))),
-    side = abs(across);
   const aa = max(float(0.06), distance.mul(0.0016));
   const asphalt = float(1).sub(smoothstep(aa.negate().add(ROAD.half), aa.add(ROAD.half), side));
   const shoulder = float(1).sub(smoothstep(ROAD.shoulder - 0.6, ROAD.shoulder + 0.8, side));
@@ -1066,13 +1074,16 @@ function mergeParts(parts) {
     nm.getNormalMatrix(m);
     const v = new THREE.Vector3(),
       n = new THREE.Vector3();
+    // a part carries one color, or paints its own vertices (the bike's lofts)
+    const own = p.color === undefined ? g.attributes.color : null;
     const c = p.color !== undefined ? new THREE.Color(p.color) : new THREE.Color(0xffffff);
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m);
       positions.push(v.x, v.y, v.z);
       n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
       normals.push(n.x, n.y, n.z);
-      colors.push(c.r, c.g, c.b);
+      if (own) colors.push(own.getX(i), own.getY(i), own.getZ(i));
+      else colors.push(c.r, c.g, c.b);
       uvs.push(g.attributes.uv?.getX(i) ?? 0, g.attributes.uv?.getY(i) ?? 0);
       if (p.card) cards.push(p.card.center.x, p.card.center.y, p.card.center.z, p.card.kept ? 1 : 0);
     }
@@ -2180,6 +2191,7 @@ const bikeMaterial = propMaterial();
 const bikeKit = { THREE, merge: mergeParts, M };
 let paintId = PAINT[storedSettings.paint] ? storedSettings.paint : PAINTS[0].id;
 const paintsMeasured = new Set();
+let bikeTriangles = 0;
 const bike = new THREE.Group();
 bike.rotation.order = 'YXZ'; // heading, then pitch, then lean
 function dressBike(id) {
@@ -2190,20 +2202,26 @@ function dressBike(id) {
   const paint = PAINT[id],
     built = buildBike(paint, bikeKit);
   if (!paintsMeasured.has(id)) {
-    const whole = mergeParts([{ geometry: built.body }, ...built.wheels.map((w) => ({ geometry: w.geometry }))]);
+    const whole = mergeParts([{ geometry: built.body }, ...built.nodes.filter((n) => n.geometry).map((n) => ({ geometry: n.geometry }))]);
     const errors = validateBaked({ ...paint, budget: { triangles: BIKE.triangles } }, whole);
+    bikeTriangles = whole.attributes.position.count / 3;
     whole.dispose();
     if (errors.length) throw new Error('scenery library: ' + errors.join('; '));
     paintsMeasured.add(id);
   }
   bike.add(new THREE.Mesh(built.body, bikeMaterial));
-  bike.userData.wheels = built.wheels.map((w) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(...w.at);
-    pivot.add(new THREE.Mesh(w.geometry, bikeMaterial));
-    bike.add(pivot);
-    return pivot;
-  });
+  // the hinged tree: each node a group at its pivot, parents first
+  const rig = {};
+  for (const node of built.nodes) {
+    const g = new THREE.Group();
+    g.position.set(...node.at);
+    if (node.rotation) g.rotation.set(...node.rotation);
+    if (node.geometry) g.add(new THREE.Mesh(node.geometry, bikeMaterial));
+    (node.parent ? rig[node.parent] : bike).add(g);
+    rig[node.id] = g;
+  }
+  bike.userData.rig = rig;
+  bike.userData.THREE = THREE;
   bike.traverse((o) => {
     if (o.isMesh) o.castShadow = o.receiveShadow = true;
   });
@@ -2543,7 +2561,7 @@ function updateRide(dt) {
   if (!state.dragging) state.nudgeYaw *= Math.exp(-dt / 1.6);
   bike.position.set(state.x, state.y, state.z);
   bike.rotation.set(-state.pitch, state.heading, -state.lean);
-  animateBike(bike, state.odometer);
+  animateBike(bike, state.odometer, { lean: state.lean, yawRate: state.yawRate + turn / dt, t: state.t, rough: 1 - state.onRoad });
   _front.set(fx, 0, fz);
 }
 
@@ -3501,6 +3519,7 @@ window.addEventListener('resize', () => {
     markOverflow();
   }
   camera.aspect = window.innerWidth / window.innerHeight;
+  fitFov();
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(renderScale());
   renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -3720,6 +3739,9 @@ window.__ride = {
   begin: () => beginBtn.click(),
   renderStyle: 'soft',
   paints: PAINTS.map((entry) => entry.id),
+  get bikeTriangles() {
+    return bikeTriangles;
+  },
   get paint() {
     return paintId;
   },
