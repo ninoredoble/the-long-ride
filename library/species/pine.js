@@ -1,6 +1,6 @@
 import { defineSpecies } from '../contract.js';
 
-// A cone of needle cards along a tall straight trunk; no limbs.
+// The highland pine: a cone of needle cards along a tall straight trunk, no limbs.
 // This entry is data for the built-in tree kit: a trunk, limbs, and a crown
 // shape (dome, cone, fan or bare) of painted cards. A species may instead
 // give bake(kit) and grow its wood parts and cards any way it likes; see

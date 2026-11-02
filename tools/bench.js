@@ -2,7 +2,7 @@ async function bench(options = window.__bench || {}) {
   // A repeatable measurement of how hard the page works the machine. Runs in a
   // main-page tab opened with `?profile=1&seed=<n>`, on either backend, against
   // the source page or the bundle, and reads only what the running page reports:
-  // the raw frame trace (`__fly.trace`, armed by the same flag) and the
+  // the raw frame trace (`__ride.trace`, armed by the same flag) and the
   // renderer's own counters. Nothing here ships; the bundler folds `src/` and
   // `library/`, never `tools/`.
   //
@@ -18,21 +18,21 @@ async function bench(options = window.__bench || {}) {
   // the browser with `--disable-gpu-vsync --disable-frame-rate-limit` as well,
   // and the frame time becomes the naked cost of a frame.
   //
-  // Why vantages and not a free flight. Cost follows what is in front of the
-  // bird, and a free flight is never twice in the same place: the same build
+  // Why vantages and not a free ride. Cost follows what is in front of the
+  // bike, and a free ride is never twice in the same place: the same build
   // measured twice drifted by more than half its frame time, which is larger
-  // than any win worth chasing. So each station teleports the bird to a fixed
+  // than any win worth chasing. So each station teleports the bike to a fixed
   // place, course and hour of this seed's world and holds it there while the
   // window is read. Draw calls and triangle counts repeating exactly across runs
   // is the check that the vantage really is the same scene.
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const settle = Date.now() + 30000;
-  while (!window.__fly?.ready && !window.flightFailed && Date.now() < settle) await wait(50);
-  const z = window.__fly;
+  while (!window.__ride?.ready && !window.rideFailed && Date.now() < settle) await wait(50);
+  const z = window.__ride;
   if (!z?.ready) throw new Error('the world did not open');
-  // A resumed flight starts somewhere else, so every vantage would be a
+  // A resumed ride starts somewhere else, so every vantage would be a
   // different scene; clear the page's memory and reload before measuring.
-  if (z.resumed) throw new Error('this world resumed a remembered flight; clear storage and reload');
+  if (z.resumed) throw new Error('this world resumed a remembered ride; clear storage and reload');
   if (!z.trace) throw new Error('open the page with ?profile=1 so the frame trace is armed');
   const stat = (list) => {
     if (!list.length) return null;
@@ -61,50 +61,41 @@ async function bench(options = window.__bench || {}) {
     wanted = (name) => !only || only.includes(name);
 
   // The world's own start, read before Begin: three hundred milliseconds of
-  // flight is already a different place, and the vantages are measured from it.
-  const start = { x: z.state.x, z: z.state.z, heading: z.state.heading };
+  // riding is already a different place, and the vantages are measured from it.
+  const start = { x: z.state.x, z: z.state.z, heading: z.state.heading, dir: z.state.dir };
+  // The bike stands still on the vantage: place, course and way along the road
+  // are put back every frame, and its height comes from the tyres as always.
+  const ride = (pin) => ({ x: pin.x, z: pin.z, heading: pin.heading, dir: pin.dir, speed: 0, yawRate: 0, lean: 0, steer: 0, nudgeYaw: 0, free: 0 });
+  const framing = (id = 'chase') => {
+    const view = z.views.find((v) => v.id === id);
+    return { yaw: view.yaw, pitch: view.pitch, dist: view.dist, lift: 0 };
+  };
   // The viewer's framing is remembered across visits, so put it back to the
   // default before measuring; otherwise a saved orbit moves every vantage.
-  Object.assign(z.cam, { yaw: 0, pitch: 0.3, dist: 17, lift: 0 });
+  Object.assign(z.cam, framing());
   if (!z.running) z.begin();
   await wait(300);
   if (z.paused) document.getElementById('pauseBtn').click();
-  const deck = z.objects.cloudSea.position.y + 55;
-  // Hold the world still: the flight keeps running, but place, course and hour
+  // Hold the world still: the ride keeps running, but place, course and hour
   // are put back every frame, so streaming, placement and light stand where the
   // vantage says and one build can be compared with another.
   const pin = { on: false };
   const hold = () => {
     if (!pin.on) return;
-    z.state.x = pin.x;
-    z.state.z = pin.z;
-    z.state.y = pin.y;
-    z.state.heading = pin.heading;
-    z.state.vy = 0;
-    z.state.yawRate = 0;
-    z.state.flapping = false;
-    z.state.flapTimer = 0;
-    z.state.bank = 0;
-    z.state.pitch = 0;
+    Object.assign(z.state, ride(pin));
     z.dayPhase = pin.day;
     // The camera's lift out of the ground eases with the frame time, so a
     // sub-pixel of it survives any settling wait and lights up every leaf edge
     // in a comparison. Zero it: the clamp underneath is exact either way.
-    Object.assign(z.cam, { yaw: 0, pitch: 0.3, dist: 17, lift: 0 });
+    Object.assign(z.cam, framing(pin.view));
     requestAnimationFrame(hold);
   };
   const station = async (name, place) => {
-    // Two steps: the heightfield only knows the ground under a place once it has
-    // streamed there, so arrive high, let it fill, then settle to the vantage.
-    Object.assign(pin, place, { y: 900, on: true });
-    z.forceHigh = !!place.high;
-    z.forceLow = false;
-    hold();
-    await wait(1500);
-    pin.y = place.high ? deck + 140 : Math.max(z.heightAt(place.x, place.z), 0) + 130;
     // The heightfield, the tree rings and the grass window all rebuild after a
     // jump; give them frames to arrive before the window opens.
-    await wait(3000);
+    Object.assign(pin, { view: undefined }, place, { on: true });
+    hold();
+    await wait(4500);
     z.trace.reset();
     const started = performance.now();
     await wait(seconds * 1000);
@@ -113,7 +104,7 @@ async function bench(options = window.__bench || {}) {
       cpu = stat(z.trace.cpu),
       render = stat(z.trace.render),
       gpu = stat(z.trace.gpu);
-    if (!frame) throw new Error(`station ${name} recorded no frames; is the flight running?`);
+    if (!frame) throw new Error(`station ${name} recorded no frames; is the ride running?`);
     const fps = frame.n / elapsed;
     const long = z.trace.frame.filter((v) => v > 20).length / frame.n;
     return {
@@ -132,20 +123,18 @@ async function bench(options = window.__bench || {}) {
       triangles: z.perf.triangles,
     };
   };
-  const at = (dx, dz, extra) => ({ x: start.x + dx, z: start.z + dz, heading: start.heading, day: 0.5, ...extra });
+  const at = (dx, dz, extra) => ({ x: start.x + dx, z: start.z + dz, heading: start.heading, dir: start.dir, day: 0.5, ...extra });
   const stations = {};
   // Noon over the world's own opening ground, and two places a few kilometres
   // off it, so one station's luck with the terrain cannot carry the number.
   if (wanted('dawn')) stations.dawn = await station('dawn', at(0, 0, { day: 0.262 }));
   if (wanted('noon')) stations.noon = await station('noon', at(0, 0, {}));
   if (wanted('far')) stations.far = await station('far', at(4200, -3100, {}));
-  // Above the deck, where the cloud sea replaces the ground.
-  if (wanted('above'))
-    stations.above = await station('above', at(0, 0, { high: true }));
-  // Midnight below the deck: the Milky Way, the stars and the moon draw here.
+  // The far framing, where the most country is in view.
+  if (wanted('wide')) stations.wide = await station('wide', at(0, 0, { view: 'far' }));
+  // Midnight: the Milky Way, the stars and the moon draw here.
   if (wanted('night')) stations.night = await station('night', at(0, 0, { day: 0 }));
   pin.on = false;
-  z.forceHigh = false;
   const canvas = document.querySelector('canvas');
   const list = Object.values(stations);
   const worst = (key) => Math.max(...list.map((s) => s[key] ?? 0));

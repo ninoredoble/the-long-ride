@@ -4,12 +4,15 @@ The page ran a laptop's fan hard. This is where the cost sits, what was taken
 off it without touching the picture, and what the remaining ideas are worth,
 so the next pass starts from measurements instead of guesses.
 
+These measurements were taken on the fly-with-me engine this page is adapted from. The frame's structure (one scene pass, a bounded terrain grid, streamed trees and grass, water, sky) is unchanged, so the costs still guide; the snow and range sections concern terrain this page no longer has, and the road, the bike and the lighter phone path have not been profiled separately.
+
 `CONTRIBUTING.md` says how to run the two tools. This file says what they found.
 
 ## How it was measured
 
-`tools/bench.js` teleports the bird to five fixed vantages of one seed's world,
-holds each still, and reads a window of frames there. Held vantages are the
+`tools/bench.js` teleported the bird to five fixed vantages of one seed's world
+(it now holds the bike on the road instead; `CONTRIBUTING.md` lists the
+stations), held each still, and read a window of frames there. Held vantages are the
 whole point: cost follows what is in front of the bird, and the same build
 measured twice on a free flight drifted by more than half its frame time, which
 is larger than any win worth chasing. Draw calls and triangle counts repeating

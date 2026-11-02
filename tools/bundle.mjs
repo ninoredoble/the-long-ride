@@ -122,10 +122,13 @@ function wrap(record, isEntry) {
 }
 
 const page = await readFile(path.join(root, PAGE), 'utf8');
+const license = (await readFile(path.join(root, 'LICENSE'), 'utf8')).trim();
+if (license.includes('*/')) throw new Error('LICENSE would close its banner comment');
 await load(ENTRY);
 const ids = order(ENTRY);
 const externalImports = [...externals].map(([spec, alias]) => `import * as ${alias} from ${JSON.stringify(spec)};`).join('\n');
 const bundle = [
+  `/*!\n${license}\n*/`,
   '// Built by tools/bundle.mjs from index.html, src/ and library/. Edit those, not this.',
   externalImports,
   'const __modules = {};',

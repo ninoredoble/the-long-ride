@@ -5,7 +5,7 @@ import { defineProp } from '../contract.js';
 // each 96 m cell of the streamed ring, reading the climate there. The engine
 // instances it, shrinks it into the ground at the ring's edge, lights it with
 // the world's own material, casts its shadow and, when `obstacle` is set,
-// keeps the bird and the camera clear of it.
+// keeps the bike and the camera clear of it.
 export default defineProp({
   id: 'boulders',
   name: 'boulders',

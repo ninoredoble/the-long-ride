@@ -90,7 +90,7 @@ function options(argv) {
   }
   if (!['both', 'video', 'hero'].includes(opts.only)) throw new Error('--only is both, video or hero');
   opts.out = path.resolve(root, opts.out);
-  opts.video = path.resolve(root, opts.video ?? path.join(opts.out, 'fly-with-me-launch.mp4'));
+  opts.video = path.resolve(root, opts.video ?? path.join(opts.out, 'the-long-ride-launch.mp4'));
   opts.hero = path.resolve(root, opts.hero ?? path.join(opts.out, 'hero.png'));
   return opts;
 }
@@ -152,7 +152,7 @@ function chromeBinary(given) {
 }
 
 async function browser(opts) {
-  const profile = await mkdtemp(path.join(os.tmpdir(), 'fly-with-me-capture-'));
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'the-long-ride-capture-'));
   const args = [
     '--headless=new',
     '--remote-debugging-port=0',
@@ -511,7 +511,7 @@ async function recordFlight(opts, url, capture) {
   try {
     await chrome.call('Page.addScriptToEvaluateOnNewDocument', { source: `(${harness.toString()})()` });
     await chrome.open(url);
-    await chrome.until(() => Boolean(window.__fly && window.__fly.ready));
+    await chrome.until(() => Boolean(window.__ride && window.__ride.ready));
     const framing = await chrome.evaluate(() => ({
       width: innerWidth,
       height: innerHeight,
@@ -552,7 +552,7 @@ async function captureHero(opts, url) {
   const chrome = await browser(opts);
   try {
     await chrome.open(url);
-    await chrome.until(() => Boolean(window.__fly && window.__fly.ready));
+    await chrome.until(() => Boolean(window.__ride && window.__ride.ready));
     await chrome.clickCentre('#beginBtn');
     // the still is the world alone; a screenshot is not a canvas copy, so
     // hiding the page's own layers here costs nothing

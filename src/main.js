@@ -1,10 +1,11 @@
-// Fly With Me: the engine. One CPU heightfield, one horizon, one climate rule,
-// the soft illustrated light, streamed rings of whatever the scenery library
-// says stands here, a bird, a camera and a day. The page (index.html) holds
-// the markup and the import map; the library (library/) holds every place.
+// The Long Ride: the engine. One CPU heightfield with one road through it, one
+// horizon, one climate rule, the soft illustrated light, streamed rings of
+// whatever the scenery library says stands here, a motorcycle, a camera and a
+// day. The page (index.html) holds the markup and the import map; the library
+// (library/) holds every place; src/world.js makes the land and the road.
 import * as THREE from 'three';
 import { buildBird, animateBird } from './birds.js';
-import { plumageCatalog, paintMarking, plumageTile } from './plumage.js';
+import { buildBike, animateBike, bikeTile, BIKE } from './bike.js';
 import {
   WebGPURenderer,
   MeshStandardNodeMaterial,
@@ -62,10 +63,12 @@ import {
   cross,
   sign,
   sqrt,
+  cos,
 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
-import { hash2, perlin2, fbm, ridgedMulti, pyramidPeaks, sstep, mulberry32 } from './noise.js';
+import { hash2, perlin2, sstep, mulberry32 } from './noise.js';
+import { createWorld, biomeWeights as climateWeights, CELL, ROAD, LAPSE, CLIMATE_STRETCH, CLIMATE_RADIUS, CLIMATE_SHARPNESS } from './world.js';
 import { createWaterMaterial } from './water.js';
 import { createMilkyWay } from './milky-way.js';
 import { LOOK, applyLook } from './color-grade.js';
@@ -77,26 +80,22 @@ const time = uniform(0);
 // ---------------------------------------------------------------------------
 // World constants. Everything is in meters and seconds.
 // ---------------------------------------------------------------------------
-const CELL = 16; // terrain sample spacing
 const N = 560; // heightfield window, N x N cells (9 km)
 const TERRAIN_CELLS = 528; // rendered terrain, ±4.2 km
 const WATER_CELLS = 132;
 const WATER_CELL = CELL * 4;
 const SEA_LEVEL = 0;
-const DECK_Y = 520; // cloud deck altitude
-// The range: a warped ridged massif carrying a lattice of pyramidal summits
-// (sampleWorld). The tallest reach 1040 to 1080 m over the check seeds, twice
-// the deck, so the flight looks further ahead than its clearance does.
-const PEAKS = { cell: 2400, radius: 850, power: 1.7, lift: 900, massif: 640 };
-// The snow line: base + slope * T from the climate's own temperature with the
-// altitude cooling undone, so cold country holds snow low and deserts only on
-// top. The GPU snow rule and the tree line both read it.
-const SNOW_LINE = { base: 200, slope: 380 };
-function snowLineAt(temp, h) {
-  return SNOW_LINE.base + SNOW_LINE.slope * (temp + Math.max(0, h) / 2600);
-}
-const SPEED = 40; // bird speed, m/s
-const CLIMB = 11; // its fastest climb, m/s
+const DECK_Y = 520; // cloud deck altitude: the summits wear it, the highland road rides under it
+// The ride: a calm cruise on the road, slower in the bends and off it.
+const RIDE = {
+  cruise: 21, // m/s on a straight road, about 75 km/h
+  grip: 3.2, // m/s² of sideways pull the bends are taken at
+  rough: 11, // m/s off the road
+  turn: 0.9, // fastest yaw rate, radians per second
+  look: 1.1, // seconds of road the bike looks ahead to steer by
+  hold: 2.6, // seconds after a steer before the bike heads back to the road
+  wade: 0.4, // meters above the sea the bike will ride down to
+};
 const DAY_SECONDS = 600; // one full turn of the day clock
 const wrapAngle = (a) => a - Math.round(a / (Math.PI * 2)) * Math.PI * 2;
 // Night is a quarter of the cycle. The sun keeps its own clock, `solar`: one
@@ -133,11 +132,11 @@ const solar = (() => {
 
 // ---------------------------------------------------------------------------
 // Memory. The page remembers the viewer's settings, and per world where the
-// flight was, so reopening the tab resumes instead of restarting. Storage can
+// ride was, so reopening the tab resumes instead of restarting. Storage can
 // be missing, full or damaged; any of those makes this a fresh visit.
 // ---------------------------------------------------------------------------
-const SETTINGS_KEY = 'fly-with-me-settings',
-  RESUME_KEY = 'fly-with-me-resume';
+const SETTINGS_KEY = 'the-long-ride-settings',
+  RESUME_KEY = 'the-long-ride-resume';
 const remember = {
   read(key) {
     try {
@@ -158,7 +157,7 @@ const remember = {
 const finite = (v, min = -Infinity, max = Infinity) =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
 const storedSettings = remember.read(SETTINGS_KEY) ?? {};
-const storedFlight = remember.read(RESUME_KEY);
+const storedRide = remember.read(RESUME_KEY);
 
 // ---------------------------------------------------------------------------
 // Seed. ?seed=<number> reproduces a world and always wins; without one the
@@ -169,6 +168,15 @@ const params = new URLSearchParams(location.search);
 // `?profile=1` arms the renderer's timestamp queries and the raw frame trace
 // that `tools/bench.js` reads. Off, the loop costs one boolean per frame.
 const profiling = params.has('profile');
+// The phone budget: a small touch screen, or `?lite=1`, renders fewer pixels,
+// a smaller shadow map, a shorter ring of trees and less grass, and skips the
+// bloom and the soft reconstruction. The same ride and the same world; a
+// budget, not a second look. `?lite=0` turns it off.
+const LITE =
+  params.get('lite') === '1' ||
+  (params.get('lite') !== '0' &&
+    matchMedia('(pointer: coarse)').matches &&
+    Math.min(screen.width, screen.height) < 820);
 const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
 let reducedMotion = motionPreference.matches;
 motionPreference.addEventListener('change', (e) => {
@@ -177,7 +185,7 @@ motionPreference.addEventListener('change', (e) => {
 });
 let seed = parseInt(params.get('seed'), 10);
 if (!Number.isFinite(seed))
-  seed = finite(storedFlight?.seed, 0, 0xffffffff) ?? (Math.random() * 0xffffffff) >>> 0;
+  seed = finite(storedRide?.seed, 0, 0xffffffff) ?? (Math.random() * 0xffffffff) >>> 0;
 seed = seed >>> 0;
 const addressUrl = new URL(location.href);
 addressUrl.searchParams.set('seed', String(seed));
@@ -276,7 +284,7 @@ const L = {
   ],
   terrain: {
     sand: 0xc5bc85,
-    snow: 0xe1e5d2,
+    snow: 0xe1e5d2, // the surf line on the shore
     seaFloor: 0x6d9988,
     waterDeep: 0x286e7b,
     waterShallow: 0x74b9a9,
@@ -296,21 +304,19 @@ const FOG_DENSITY = L.fogDensity;
 // ---------------------------------------------------------------------------
 const BIOMES = registry.biomes,
   SPECIES = Object.fromEntries(registry.species.map((entry) => [entry.id, entry])),
-  RUINS = registry.ruins,
+  SITES = registry.sites,
   PROPS = registry.props,
   BIRDS = registry.birds,
-  BIRD = Object.fromEntries(BIRDS.map((entry) => [entry.id, entry]));
+  PAINTS = registry.paints.map((entry) => ({ ...entry, body: swatchColor(entry.body), trim: swatchColor(entry.trim) })),
+  PAINT = Object.assign(Object.create(null), Object.fromEntries(PAINTS.map((entry) => [entry.id, entry])));
 {
   const errors = validateLibrary(registry);
   if (errors.length) throw new Error('scenery library: ' + errors.join('; '));
 }
-// Every kind in its own colors and in every plumage: the catalog the perch shows.
-const PLUMAGES = registry.plumages,
-  catalog = plumageCatalog(registry);
 // How rare the sites are: one site cell in this many carries a site, before
 // the biome's welcome. Cells are SITE_CELL meters wide.
 const SITE_CELL = 1200,
-  SITE_ODDS = 0.22;
+  SITE_ODDS = 0.3;
 // A color from the library, refused by name when it leaves the envelope.
 function libraryColor(where, value) {
   const problem = colorProblem(value);
@@ -319,85 +325,23 @@ function libraryColor(where, value) {
 }
 
 // ---------------------------------------------------------------------------
-// Noise on the CPU (src/noise.js) is the single source of truth for the
-// terrain; the GPU only displaces a static grid by what the CPU wrote.
+// The world on the CPU (src/world.js) is the single source of truth for the
+// terrain and the road; the GPU only displaces a static grid by what the CPU
+// wrote, and paints the road from the rows the CPU wrote.
 // ---------------------------------------------------------------------------
-// Three field seeds, hashed rather than sliced from the bits, so small
-// seeds do not share a climate.
-const S1 = hash2(seed, 1, 0x1a2b) & 0xffff,
-  S2 = hash2(seed, 2, 0x3c4d) & 0xffff,
-  S3 = hash2(seed, 3, 0x5e6f) & 0xffff;
-// Slow control fields decide what kind of place this is; fast noise only
-// decorates. Continentalness shapes the land. Temperature, moisture and
-// region are the climate the biomes read: a dozen kilometers wide, warped so
-// their borders wander like coastlines, and never read directly for color.
-const CLIMATE_SCALE = 12000;
-function sampleWorld(x, z, out) {
-  const wx = x + 700 * fbm(x / 2200 + 31.7, z / 2200 - 12.3, S3, 3);
-  const wz = z + 700 * fbm(x / 2200 - 54.1, z / 2200 + 77.9, S3 + 7, 3);
-  const cont = fbm(wx / 3400, wz / 3400, S1, 4) * 0.5 + 0.5; // continentalness
-  const kx = x + 900 * fbm(x / 3000 + 4.1, z / 3000 - 2.2, S3 + 41, 2),
-    kz = z + 900 * fbm(x / 3000 - 7.7, z / 3000 + 5.5, S3 + 43, 2);
-  const temp = fbm(kx / CLIMATE_SCALE + 9.1, kz / CLIMATE_SCALE + 3.3, S2, 2) * 0.5 + 0.5;
-  const moist = fbm(kx / (CLIMATE_SCALE * 0.8) - 8.4, kz / (CLIMATE_SCALE * 0.8) + 15.2, S2 + 3, 2) * 0.5 + 0.5;
-  const region = fbm(kx / (CLIMATE_SCALE * 0.9) + 21.3, kz / (CLIMATE_SCALE * 0.9) - 8.8, S3 + 19, 2) * 0.5 + 0.5;
-  const land = sstep(0.4, 0.6, cont);
-  const hills = fbm(wx / 520, wz / 520, S1 + 11, 4);
-  const mountainMask = sstep(0.56, 0.82, cont);
-  // The massif: a warped four-octave ridged multifractal, so crests carry
-  // arêtes and gullies. On it, the pyramids: they stand in barely warped
-  // coordinates (the 700 m continental warp would bend their faces into
-  // loaves), and the massif quiets under each so its faces stay clean sheets.
-  const rx = wx + 260 * fbm(wx / 900 + 3.3, wz / 900 - 1.1, S1 + 29, 2),
-    rz = wz + 260 * fbm(wx / 900 - 2.2, wz / 900 + 4.4, S1 + 31, 2);
-  const ridge = ridgedMulti(rx / 1600, rz / 1600, S1 + 23, 4);
-  const px = x + 90 * fbm(x / 700 + 1.3, z / 700 + 2.1, S1 + 61, 2),
-    pz = z + 90 * fbm(x / 700 - 3.7, z / 700 + 0.4, S1 + 63, 2);
-  const peak = pyramidPeaks(px, pz, S1 + 47, PEAKS.cell, PEAKS.radius, PEAKS.power);
-  const lift = (ridge * PEAKS.massif * (1 - 0.45 * sstep(0.05, 0.5, peak)) + peak * PEAKS.lift) * mountainMask;
-  let h = -70 + 150 * land + hills * (10 + 38 * land) + lift;
-  // a gentle shelf so beaches are wide and the shoreline never zigzags
-  const shelf = sstep(-30, 30, h);
-  h = h * (0.55 + 0.45 * shelf) + (1 - shelf) * -6;
-  out[0] = h;
-  out[1] = temp - Math.max(0, h) / 2600; // colder with altitude
-  out[2] = moist;
-  out[3] = region;
-  return out;
-}
-// How much of each biome a climate is. The same rule runs on the GPU for
-// terrain color, so a place is the same biome for its ground, its trees,
-// its grass, its rocks and its ruins. Each biome is a soft cell in climate
-// space; sharpening keeps most ground inside one biome with bands of a few
-// hundred meters between them, so borders never seam and never smear.
-const CLIMATE_STRETCH = 2.2,
-  CLIMATE_RADIUS = 0.12,
-  CLIMATE_SHARPNESS = 2.2;
-const climateAxis = (v) => Math.min(1, Math.max(0, (v - 0.5) * CLIMATE_STRETCH + 0.5));
-function biomeWeights(temp, moist, region, out = new Float32Array(BIOMES.length)) {
-  const t = climateAxis(temp),
-    m = climateAxis(moist),
-    r = climateAxis(region);
-  let nearest = Infinity;
-  for (let i = 0; i < BIOMES.length; i++) {
-    const [ct, cm, cr] = BIOMES[i].climate;
-    out[i] = ((t - ct) ** 2 + (m - cm) ** 2 + (r - cr) ** 2) / (CLIMATE_RADIUS * CLIMATE_RADIUS);
-    nearest = Math.min(nearest, out[i]);
-  }
-  // Measured from the nearest cell, so the largest weight is one and the
-  // GPU's single-precision copy of this rule never underflows.
-  let sum = 0;
-  for (let i = 0; i < BIOMES.length; i++) sum += out[i] = Math.exp(-CLIMATE_SHARPNESS * (out[i] - nearest));
-  for (let i = 0; i < BIOMES.length; i++) out[i] /= sum;
-  return out;
-}
+const world = createWorld(seed),
+  road = world.road,
+  S1 = world.S1,
+  S2 = world.S2,
+  S3 = world.S3;
+const biomeWeights = (temp, moist, region, out) => climateWeights(BIOMES, temp, moist, region, out);
 function biomeAt(x, z, out) {
   return biomeWeights(fieldAt(x, z, 1), fieldAt(x, z, 2), fieldAt(x, z, 3), out);
 }
 
 // ---------------------------------------------------------------------------
 // The heightfield: a toroidal N x N window of world cells kept fresh around the
-// bird. Texel (ix mod N, iz mod N) always holds world cell (ix, iz).
+// bike. Texel (ix mod N, iz mod N) always holds world cell (ix, iz).
 // ---------------------------------------------------------------------------
 const hfData = new Float32Array(N * N * 4);
 const hfTex = new THREE.DataTexture(hfData, N, N, THREE.RGBAFormat, THREE.FloatType);
@@ -410,19 +354,36 @@ function wrap(i) {
   return ((i % N) + N) % N;
 }
 function fillCell(ix, iz) {
-  sampleWorld(ix * CELL, iz * CELL, tmp4);
+  world.sample(ix * CELL, iz * CELL, tmp4);
   const o = (wrap(iz) * N + wrap(ix)) * 4;
   hfData[o] = tmp4[0];
   hfData[o + 1] = tmp4[1];
   hfData[o + 2] = tmp4[2];
   hfData[o + 3] = tmp4[3];
 }
+// The road's rows, toroidal like the heightfield's: texel (iz mod N) holds
+// world row iz's centre line x, its slope and its surface height, which is
+// everything the terrain shader needs to paint the road where the bike is.
+const roadData = new Float32Array(N * 4);
+const roadTex = new THREE.DataTexture(roadData, N, 1, THREE.RGBAFormat, THREE.FloatType);
+roadTex.magFilter = roadTex.minFilter = THREE.NearestFilter;
+roadTex.generateMipmaps = false;
+function fillRoadRow(iz) {
+  const r = road.row(iz),
+    o = wrap(iz) * 4;
+  roadData[o] = r.x;
+  roadData[o + 1] = road.row(iz + 1).x - r.x;
+  roadData[o + 2] = road.rowY(iz);
+  roadData[o + 3] = iz;
+}
 function fillAll(cx, cz) {
   hfCx = cx;
   hfCz = cz;
-  for (let iz = cz - N / 2; iz < cz + N / 2; iz++)
+  for (let iz = cz - N / 2; iz < cz + N / 2; iz++) {
+    fillRoadRow(iz);
     for (let ix = cx - N / 2; ix < cx + N / 2; ix++) fillCell(ix, iz);
-  hfTex.needsUpdate = true;
+  }
+  hfTex.needsUpdate = roadTex.needsUpdate = true;
 }
 function updateHeightfield(x, z) {
   const cx = Math.round(x / CELL),
@@ -447,12 +408,16 @@ function updateHeightfield(x, z) {
   while (hfCz < cz) {
     hfCz++;
     const iz = hfCz + N / 2 - 1;
+    fillRoadRow(iz);
+    roadTex.needsUpdate = true;
     for (let ix = hfCx - N / 2; ix < hfCx + N / 2; ix++) fillCell(ix, iz);
     changed = true;
   }
   while (hfCz > cz) {
     hfCz--;
     const iz = hfCz - N / 2;
+    fillRoadRow(iz);
+    roadTex.needsUpdate = true;
     for (let ix = hfCx - N / 2; ix < hfCx + N / 2; ix++) fillCell(ix, iz);
     changed = true;
   }
@@ -508,8 +473,8 @@ const renderer = new WebGPURenderer({
 const renderScale = () =>
   Math.min(
     window.devicePixelRatio || 1,
-    1.5,
-    Math.sqrt(2000000 / (Math.max(1, window.innerWidth) * Math.max(1, window.innerHeight))),
+    LITE ? 1.25 : 1.5,
+    Math.sqrt((LITE ? 1100000 : 2000000) / (Math.max(1, window.innerWidth) * Math.max(1, window.innerHeight))),
   );
 renderer.setPixelRatio(renderScale());
 renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -521,12 +486,19 @@ document.getElementById('backendLabel').textContent = renderer.backend.isWebGPUB
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 14000);
+// A tall phone keeps the horizontal view a landscape screen has: the bike and
+// the bends ahead stay in frame instead of a road filling the glass.
+function fitFov() {
+  const wide = 2 * Math.atan(Math.tan((62 * Math.PI) / 360) / Math.max(0.01, camera.aspect));
+  camera.fov = Math.min(84, Math.max(55, (wide * 180) / Math.PI));
+}
+fitFov();
 const sun = new THREE.DirectionalLight(0xffffff, 2.0);
 const hemi = new THREE.HemisphereLight(0xa9c8e6, 0x8a8f78, 1.0);
 scene.add(sun, sun.target, hemi);
 renderer.shadowMap.enabled = true;
 sun.castShadow = true;
-const SHADOW_MAP = 2048,
+const SHADOW_MAP = LITE ? 1024 : 2048,
   SHADOW_HALF = 360;
 sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
 Object.assign(sun.shadow.camera, {
@@ -859,48 +831,37 @@ const uOrigin = uniform(new THREE.Vector2(0, 0));
 const uWaterOrigin = uniform(new THREE.Vector2(0, 0));
 const palette = {};
 for (const k of Object.keys(L.terrain)) palette[k] = uniform(C(L.terrain[k]));
-// The snow and the alpine rock. Colors are the painted look's own: a sky-blue
-// shade, a lavender shade while the sun sits low, dark blue-grey rock warmer
-// toward the sun, an ochre band, blue-white ice.
 const K = (hex) => {
   const c = C(hex);
   return vec3(c.r, c.g, c.b);
 };
-const SNOW = {
-  shade: K(0xb4c8ea),
-  shadeLow: K(0xa4accb),
-  rock: K(0x565963),
-  ochre: K(0x9c7c4c),
-  iceLit: K(0xe2f1f7),
-  iceShade: K(0x8fb3d6),
-  aspect: 50, // meters the line rises on the sunny side
-  wobble: 45, // meters of slow wander in the line
-  drift: 1.6, // meters of line per meter of hollow
-  hold: 0.09, // slope (1 - normal.y) up to which snow holds fully: 25 degrees
-  flute: 0.16, // slope the fall-line flutes move the hold by
-  ledge: 0.25, // snow on the strata of the upper faces
-  band: 0.7, // strength of the ochre band
-  rib: 0.3, // darkening of the rock ribs between flutes
-  rockBand: 320, // meters of alpine rock under the snow line
-  iceReach: 240, // meters the ice reaches below the snow
-  glow: 0.4, // alpenglow share on snow when the sun sits low
-  rockGlow: 0.3, // and on the alpine rock
-  skyLift: 1.4, // how much the sky lights shaded snow
+// The road's paint and the headlight's pool. The asphalt is a warm grey, a
+// little patched; the lines are a worn paper white and fade with distance
+// before they could shimmer.
+const ROAD_PAINT = {
+  asphalt: K(0x5f5d58),
+  patch: K(0x4f4e4b),
+  gravel: K(0x948b78),
+  line: K(0xe6e0d0),
+  dash: 9, // meters of dash and gap along z
+  lamp: K(0xffe2a8),
 };
-const NOON_XZ = vec2(-0.45, 0.55).normalize(); // the sun's horizontal direction at noon (skyBodies)
-const WIND = vec2(0.83, 0.56), // one world wind: snow streaks and summit plumes
-  WIND_PERP = vec2(-0.56, 0.83);
+// The headlight: the bike's place, heading and how strongly it shines (night only).
+const uLamp = uniform(new THREE.Vector4(0, 0, 0, 0));
 const biomeColors = BIOMES.map((biome) => ({
   base: libraryColor(`biome ${biome.id}.ground.base`, biome.ground.base),
   alt: libraryColor(`biome ${biome.id}.ground.alt`, biome.ground.alt),
   rock: libraryColor(`biome ${biome.id}.ground.rock`, biome.ground.rock),
+  field: biome.ground.pattern ? libraryColor(`biome ${biome.id}.ground.field`, biome.ground.field) : null,
 }));
 const biomeUniforms = biomeColors.map((colors) => ({
   base: uniform(colors.base.clone()),
   alt: uniform(colors.alt.clone()),
   rock: uniform(colors.rock.clone()),
+  field: colors.field ? uniform(colors.field.clone()) : null,
 }));
 const loadCell = (ix, iz) => textureLoad(hfTex, ivec2(ix.mod(N).toInt(), iz.mod(N).toInt()));
+const loadRoad = (iz) => textureLoad(roadTex, ivec2(iz.mod(N).toInt(), 0));
 function buildGrid(cells, cell) {
   const side = cells + 1,
     count = side * side;
@@ -959,13 +920,8 @@ let terrainMat;
     moist = a.z.add(b.z).add(c.z).div(3),
     region = a.w.add(b.w).add(c.w).div(3);
   const slope = float(1).sub(varying(surfaceNormal).normalize().y);
-  // Curvature from the same heightfield, in the vertex stage: the mean of the
-  // neighbours minus the vertex, in meters, hollows positive, crests negative,
-  // on 48 m and 96 m stencils.
-  const around = (r) =>
-    loadCell(ix.sub(r), iz).x.add(loadCell(ix.add(r), iz).x).add(loadCell(ix, iz.sub(r)).x).add(loadCell(ix, iz.add(r)).x).mul(0.25).sub(hv);
-  const lapBroad = varying(around(3)),
-    lapWide = varying(around(6));
+  const xz = positionWorld.xz,
+    distance = length(positionWorld.sub(cameraPosition));
 
   // The GPU side of biomeWeights: the same cells, the same sharpening, on
   // the triangle's own climate, so ground color and placement agree.
@@ -973,47 +929,46 @@ let terrainMat;
   const ct = climateAxisNode(temp),
     cm = climateAxisNode(moist),
     cr = climateAxisNode(region);
-  // Snow. The line is snowLineAt on the GPU; exposure moves it: faces toward
-  // the noon sun melt out higher, hollows keep drifts lower, crests blow bare,
-  // and a slow wobble keeps it from reading as a contour. Snow holds fully
-  // only under 25 degrees; steeper faces are rock with snow in the fall-line
-  // flutes, on level strata and along the crests, so a summit pyramid reads
-  // as rock and snow the way the great Himalayan peaks do. The line's wobble
-  // is a vertex varying and the rest of the line is arithmetic, so the line
-  // costs nothing; the flutes, strata, ice, ochre and streaks cost fourteen
-  // noise taps a fragment and run only where they can show: near or above
-  // the line, in a deep hollow just under it, or on a steep face in the rock
-  // band. The lowlands, most of any frame, pay nothing for the snow.
-  const wobble = varying(
-    mx_noise_float(vec2(wx, wz).mul(1 / 260))
-      .mul(SNOW.wobble)
-      .add(mx_noise_float(vec2(wx, wz).mul(1 / 70)).mul(SNOW.wobble * 0.3)),
-  );
-  // the snow's cover, shared by the color and by the sky lift of shaded snow
-  const snowAmount = float(0).toVar();
-  const snow = (() => {
-    const n = varying(surfaceNormal).normalize();
-    const nl = dot(n, uSunDir);
-    const xz = positionWorld.xz;
-    const baseTemp = temp.add(h.div(2600.0));
-    const downhill = normalize(n.xz.add(vec2(0.0001, 0.0)));
-    const aspect = dot(downhill, NOON_XZ).mul(smoothstep(0.04, 0.35, slope));
-    const line = baseTemp.mul(SNOW_LINE.slope).add(SNOW_LINE.base).add(aspect.mul(SNOW.aspect)).add(wobble).sub(lapBroad.mul(SNOW.drift));
-    const edge = h.sub(line);
-    const steep = smoothstep(SNOW.hold - 0.05, SNOW.hold + 0.2, slope);
-    const alpine = smoothstep(line.sub(SNOW.rockBand), line.sub(30.0), h);
-    const terminator = smoothstep(-0.02, 0.32, nl);
-    const glowAmt = uLowSun.mul(smoothstep(0.0, 0.5, nl)).mul(SNOW.glow);
-    const cold = smoothstep(0.62, 0.42, baseTemp);
-    const basin = smoothstep(3.0, 14.0, lapWide);
-    const gate = edge
-      .greaterThan(-60.0)
-      .or(basin.greaterThan(0.0).and(edge.greaterThan(-SNOW.iceReach - 10)))
-      .or(slope.greaterThan(0.16).and(alpine.greaterThan(0.0)));
-    return { xz, downhill, edge, steep, alpine, terminator, glowAmt, cold, basin, gate };
+  // Farmland. Paddies follow the contours, so on gentle ground they are wide
+  // and on a slope they crowd into terraces, each with its bund; a slow grid
+  // splits the flats, and each paddy is flooded, green or gold of its own.
+  // Planted rows run their own way in each field, on red earth, some fields
+  // cleared. Fine lines fade with distance before they could shimmer, leaving
+  // the patchwork.
+  const fz = wz.div(CELL),
+    rz = fz.floor(),
+    r0 = loadRoad(rz),
+    r1 = loadRoad(rz.add(1));
+  const centre = mix(r0.x, r1.x, fract(fz)),
+    tangent = r0.y.div(CELL);
+  const across = positionWorld.x.sub(centre).div(sqrt(tangent.mul(tangent).add(1))),
+    side = abs(across);
+  const near = float(1).sub(smoothstep(140, 700, distance));
+  const terraces = (() => {
+    const wobble = mx_noise_float(xz.mul(0.012)).mul(0.7);
+    const band = h.div(1.7).add(wobble),
+      ring = fract(band);
+    const plot = xz.add(vec2(mx_noise_float(xz.mul(0.02)).mul(6), mx_noise_float(xz.mul(0.02).add(9)).mul(6))).div(38),
+      edge = max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5)));
+    const id = hash(band.floor().mul(17.3).add(plot.x.floor().mul(3.1)).add(plot.y.floor().mul(7.9)));
+    const bund = max(smoothstep(0.86, 0.95, ring), smoothstep(0.46, 0.49, edge)).mul(near);
+    return { flooded: step(id, 0.38), gold: step(0.82, id), bund };
+  })();
+  const rows = (() => {
+    const plot = xz.div(120),
+      id = plot.floor(),
+      r = hash(id.x.mul(12.9).add(id.y.mul(78.2))),
+      angle = r.mul(Math.PI);
+    const dir = vec2(cos(angle), sin(angle));
+    const stripe = sin(dot(xz, dir).mul(Math.PI * 2 / 1.7));
+    const plants = mix(float(0.62), smoothstep(-0.35, 0.35, stripe), float(1).sub(smoothstep(40, 160, distance)));
+    const lane = smoothstep(0.47, 0.495, max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5))));
+    const cleared = step(0.86, hash(id.x.mul(4.1).add(id.y.mul(9.7)).add(3)));
+    const young = step(0.62, r);
+    return float(1).sub(plants.mul(mix(1, 0.55, young))).max(cleared).max(lane).clamp(0, 1);
   })();
   const colorNode = Fn(() => {
-    const macro = smoothstep(0.18, 0.48, mx_noise_float(positionWorld.xz.mul(0.012)));
+    const macro = smoothstep(0.18, 0.48, mx_noise_float(xz.mul(0.012)));
     const distances = BIOMES.map(({ climate: [t0, m0, r0] }) =>
       ct.sub(t0).pow(2).add(cm.sub(m0).pow(2)).add(cr.sub(r0).pow(2)).div(CLIMATE_RADIUS * CLIMATE_RADIUS).toVar(),
     );
@@ -1023,105 +978,57 @@ let terrainMat;
       rock = vec3(0).toVar(),
       total = float(0).toVar();
     distances.forEach((d, i) => {
-      const w = exp(d.sub(nearest).mul(-CLIMATE_SHARPNESS));
-      ground.addAssign(mix(biomeUniforms[i].base, biomeUniforms[i].alt, macro).mul(w));
-      rock.addAssign(biomeUniforms[i].rock.mul(w));
+      const w = exp(d.sub(nearest).mul(-CLIMATE_SHARPNESS)),
+        u = biomeUniforms[i],
+        pattern = BIOMES[i].ground.pattern;
+      let own = mix(u.base, u.alt, macro);
+      if (pattern === 'terraces') {
+        const water = mix(u.field, uHorizon, 0.3);
+        own = mix(mix(u.base, u.alt, terraces.gold), water, terraces.flooded);
+        own = mix(own, u.base.mul(0.78), terraces.bund);
+      } else if (pattern === 'rows') own = mix(own, u.field, rows.mul(0.6));
+      ground.addAssign(own.mul(w));
+      rock.addAssign(u.rock.mul(w));
       total.addAssign(w);
     });
     ground.divAssign(total);
     rock.divAssign(total);
     ground.assign(mix(palette.seaFloor, ground, smoothstep(-10.0, 0.5, h)));
-    const { xz, downhill, edge, steep, alpine, terminator, glowAmt, cold, basin, gate } = snow;
-    snowAmount.assign(0.0);
-    const tongue = float(0).toVar(),
-      ledge = float(0).toVar(),
-      rib = float(0).toVar(),
-      band = float(0).toVar(),
-      crevasse = float(0).toVar(),
-      grain = float(1).toVar();
-    If(gate, () => {
-      // Flutes: stripes down the fall line from six fixed stripe directions,
-      // blended by how well each matches the face's own downhill direction. A
-      // stripe field that rotated with the normal would marble, since world
-      // coordinates are kilometres long. In patches, broken by rock.
-      let fluteSum = float(0),
-        weightSum = float(0);
-      for (let i = 0; i < 6; i++) {
-        const a = (i * Math.PI) / 6;
-        const dir = vec2(Math.cos(a), Math.sin(a)),
-          perp = vec2(-Math.sin(a), Math.cos(a));
-        const w = dot(downhill, dir).abs().pow(16);
-        const stripe = mx_noise_float(vec2(dot(xz, perp).mul(1 / 24), dot(xz, dir).mul(1 / 900).add(i * 7.1)));
-        fluteSum = fluteSum.add(stripe.mul(w));
-        weightSum = weightSum.add(w);
-      }
-      const patchy = smoothstep(-0.25, 0.35, mx_noise_float(xz.mul(1 / 160).add(vec2(3.1, 7.7))));
-      const flute = fluteSum.div(weightSum.add(0.0001)).mul(1.8).clamp(-1, 1).mul(patchy);
-      const above = smoothstep(-28.0, 24.0, edge);
-      const holdAmt = smoothstep(SNOW.hold + 0.16, SNOW.hold, slope.sub(flute.mul(SNOW.flute)));
-      // strata: thin level bands, faintly tilted, fading in and out over 220 m
-      ledge.assign(
-        smoothstep(0.72, 0.95, sin(h.mul(0.12).add(mx_noise_float(xz.mul(0.004)).mul(1.2)))).mul(
-          smoothstep(-0.2, 0.3, mx_noise_float(xz.mul(1 / 220))),
-        ),
-      );
-      const ledgeSnow = ledge.mul(smoothstep(150.0, 260.0, edge)).mul(steep).mul(SNOW.ledge).mul(smoothstep(0.75, 0.45, slope));
-      const crest = smoothstep(-3.0, -12.0, lapBroad).mul(smoothstep(0.7, 0.35, slope));
-      rib.assign(steep.mul(smoothstep(0.1, -0.4, flute)));
-      // Ice: blue-white seracs hanging in the deep hollows just under the
-      // snow, in cold country only, with broken crevasse lines along the
-      // contour; the ice shows below the snow and through it where the
-      // drifts thin.
-      tongue.assign(basin.mul(cold).mul(smoothstep(-SNOW.iceReach, -30.0, edge)).mul(smoothstep(0.5, 0.25, slope)));
-      crevasse.assign(
-        smoothstep(0.75, 0.95, sin(edge.mul(0.45).add(mx_noise_float(xz.mul(0.03)).mul(4.0)))).mul(
-          smoothstep(0.0, 0.3, mx_noise_float(xz.mul(0.06))),
-        ),
-      );
-      snowAmount.assign(above.mul(holdAmt.max(ledgeSnow).max(crest)).mul(float(1).sub(tongue.mul(0.65))));
-      // an ochre band across the upper faces, in patches
-      const patch = smoothstep(0.1, 0.5, mx_noise_float(xz.mul(0.006)));
-      band.assign(smoothstep(75.0, 100.0, edge).mul(smoothstep(170.0, 145.0, edge)).mul(patch).mul(SNOW.band).mul(alpine));
-      // wind streaks and drift undulation of a few percent
-      const streak = mx_noise_float(vec2(dot(xz, WIND).mul(0.05), dot(xz, WIND_PERP).mul(0.5)));
-      const drift = mx_noise_float(xz.mul(0.035));
-      grain.assign(streak.mul(0.035).add(drift.mul(0.05)).add(1.0));
-    });
-    const ice = mix(SNOW.iceShade, SNOW.iceLit, terminator).mul(float(1).sub(crevasse.mul(0.35)));
-    // Alpine rock: dark, warmer toward the sun, in a band under the snow line
-    // and taking over sooner on steep faces there; the ochre band; strata
-    // shadows; darker ribs between the flutes.
-    let alpineRock = mix(rock, mix(SNOW.rock, SNOW.rock.mul(vec3(1.18, 1.08, 0.94)), terminator), alpine.mul(0.92));
-    alpineRock = mix(alpineRock, SNOW.ochre, band)
-      .mul(float(1).sub(ledge.mul(alpine).mul(0.12)))
-      .mul(float(1).sub(rib.mul(SNOW.rib)));
-    const rockAmt = smoothstep(mix(0.32, 0.22, alpine), mix(0.55, 0.44, alpine), slope);
-    ground.assign(mix(ground, alpineRock, rockAmt));
-    // The snow: warm white toward the sun, sky blue in its own shade, with the
-    // streaks and drifts, and alpenglow from the horizon band while the sun
-    // sits low, rock included.
-    const shade = mix(SNOW.shade, SNOW.shadeLow, uLowSun);
-    let snowColor = mix(shade, palette.snow, terminator).mul(grain);
-    snowColor = mix(snowColor, uGlow, glowAmt);
-    ground.assign(mix(ground, uGlow, glowAmt.mul(alpine).mul(SNOW.rockGlow)));
-    ground.assign(mix(ground, ice, tongue));
-    ground.assign(mix(ground, snowColor, snowAmount));
+    // the cut that carves the road is not a cliff: no bare rock within its bank
+    ground.assign(mix(ground, rock, smoothstep(0.3, 0.52, slope).mul(smoothstep(ROAD.bank * 0.5, ROAD.bank, side))));
     return stylize(ground);
   })();
-  const brush = mx_noise_float(positionWorld.xz.mul(0.018))
+  const brush = mx_noise_float(xz.mul(0.018))
     .mul(0.04)
-    .add(mx_noise_float(positionWorld.xz.mul(0.13)).mul(0.015))
+    .add(mx_noise_float(xz.mul(0.13)).mul(0.015))
     .add(1);
+  // The road, painted from the CPU's own rows: the centre line interpolated
+  // between them exactly as road.x does, the distance across it measured
+  // square to the road, asphalt, gravel shoulders, edge lines and a dashed
+  // centre line. The ground under it is the carved bench, so it lies flat.
+  const aa = max(float(0.06), distance.mul(0.0016));
+  const asphalt = float(1).sub(smoothstep(aa.negate().add(ROAD.half), aa.add(ROAD.half), side));
+  const shoulder = float(1).sub(smoothstep(ROAD.shoulder - 0.6, ROAD.shoulder + 0.8, side));
+  const lineFade = float(1).sub(smoothstep(90, 320, distance));
+  const edgeLine = smoothstep(aa.negate().add(ROAD.half - 0.5), ROAD.half - 0.5, side).mul(float(1).sub(smoothstep(ROAD.half - 0.32, aa.add(ROAD.half - 0.32), side)));
+  const dash = step(fract(positionWorld.z.div(ROAD_PAINT.dash * 2)), 0.5).mul(float(1).sub(smoothstep(0.07, aa.add(0.07), side)));
+  const patches = smoothstep(0.35, 0.6, mx_noise_float(xz.mul(0.09))).mul(0.6);
+  let surface = mix(ROAD_PAINT.asphalt, ROAD_PAINT.patch, patches);
+  surface = mix(surface, ROAD_PAINT.line, edgeLine.max(dash).mul(lineFade).mul(0.9));
+  const grounded = mix(palette.sand, colorNode, smoothstep(1.5, 7.5, h));
+  const painted = mix(mix(grounded, ROAD_PAINT.gravel, shoulder.mul(0.8)), surface, asphalt);
+  // The headlight's pool on the ground ahead of the bike, at night.
+  const toward = xz.sub(uLamp.xy),
+    forward = vec2(sin(uLamp.z), cos(uLamp.z));
+  const along = dot(toward, forward),
+    beside = abs(dot(toward, vec2(forward.y, forward.x.negate())));
+  const pool = smoothstep(1.5, 6, along)
+    .mul(float(1).sub(smoothstep(14, 48, along)))
+    .mul(float(1).sub(smoothstep(along.mul(0.2).add(1), along.mul(0.42).add(2.5), beside)))
+    .mul(uLamp.w);
   // Shore masks use the actual fragment height, never interpolated corner colors.
-  terrainMat = litMaterial(mix(palette.sand, colorNode, smoothstep(1.5, 7.5, positionWorld.y)).mul(brush), {
-    // Shaded snow is lit by the whole sky: a lift in the shade's own color, so
-    // a face away from the sun still reads as snow, not rock.
-    emissiveNode: stylize(mix(SNOW.shade, SNOW.shadeLow, uLowSun))
-      .mul(mix(uUpper, uGlow, uLowSun.mul(0.5)))
-      .mul(snowAmount)
-      .mul(float(1).sub(uNight.mul(0.85)))
-      .mul(float(1).sub(uLowSun.mul(0.5)))
-      .mul(SNOW.skyLift),
+  terrainMat = litMaterial(painted.mul(brush), {
+    emissiveNode: painted.mul(ROAD_PAINT.lamp).mul(pool).mul(5),
   });
   terrainMat.positionNode = vec3(positionLocal.x, hv, positionLocal.z);
   terrainMat.normalNode = transformNormalToView(varying(surfaceNormal).normalize());
@@ -1167,13 +1074,16 @@ function mergeParts(parts) {
     nm.getNormalMatrix(m);
     const v = new THREE.Vector3(),
       n = new THREE.Vector3();
+    // a part carries one color, or paints its own vertices (the bike's lofts)
+    const own = p.color === undefined ? g.attributes.color : null;
     const c = p.color !== undefined ? new THREE.Color(p.color) : new THREE.Color(0xffffff);
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m);
       positions.push(v.x, v.y, v.z);
       n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
       normals.push(n.x, n.y, n.z);
-      colors.push(c.r, c.g, c.b);
+      if (own) colors.push(own.getX(i), own.getY(i), own.getZ(i));
+      else colors.push(c.r, c.g, c.b);
       uvs.push(g.attributes.uv?.getX(i) ?? 0, g.attributes.uv?.getY(i) ?? 0);
       if (p.card) cards.push(p.card.center.x, p.card.center.y, p.card.center.z, p.card.kept ? 1 : 0);
     }
@@ -1360,8 +1270,9 @@ barkRelief.wrapS = barkRelief.wrapT = THREE.RepeatWrapping;
 // shrink to nothing, and at the band's end the two are pixel-identical, so
 // the swap is invisible. Before the streamed ring ends, every tree shrinks into
 // its base, because the fog is still thin there and a dissolve would show.
+const TREE_RADIUS = LITE ? 1300 : 1900;
 const CROWN_FADE = [540, 680],
-  RING_FADE = [1680, 1850];
+  RING_FADE = [TREE_RADIUS - 220, TREE_RADIUS - 50];
 // Each vertex reads its own instance base, so a whole tree shares one distance.
 const treeBase = attribute('base', 'vec3');
 const baseDistance = length(treeBase.sub(cameraPosition));
@@ -1604,12 +1515,15 @@ const speciesPools = {};
 for (const [id, spec] of Object.entries(SPECIES)) speciesPools[id] = bakeSpecies(id, spec);
 const speciesIds = Object.keys(speciesPools);
 const treeRecords = [];
-const TREE_CELL = 96,
-  TREE_RADIUS = 1900;
+const TREE_CELL = 96;
 // Crown assignment margins: a ring rebuild happens at most one cell after the
-// bird crosses a cell, and the camera orbits at most CAMERA.maxDist from it.
-const NEAR_CROWN = 830,
-  FAR_CROWN = 400;
+// bike crosses a cell, and the camera orbits at most CAMERA.maxDist from it.
+const NEAR_CROWN = 850,
+  FAR_CROWN = 370;
+// The road keeps its verge clear: nothing stands within this of the asphalt's
+// edge, a tree by its trunk and crown.
+const VERGE = 4;
+const roadSide = (x, z) => road.distance(x, z);
 // Props: any object the library places in the world. Each kind bakes one
 // geometry through the prop kit, is measured against its budget, and gets an
 // instanced pool that shrinks into the ground at the ring's edge like a tree.
@@ -1726,6 +1640,11 @@ function placeTrees(bx, bz) {
     height: heightAt,
     slope: slopeAt,
     land: (x, z) => heightAt(x, z) > 3,
+    // the road: how far a point is from its centre line, signed (+x side
+    // positive), unsigned, and the road's heading at a z
+    roadSide,
+    road: (x, z) => Math.abs(roadSide(x, z)),
+    roadHeading: (z) => road.heading(z),
   };
   for (let gz = cz - r; gz <= cz + r && n < MAX_TREES; gz++)
     for (let gx = cx - r; gx <= cx + r && n < MAX_TREES; gx++) {
@@ -1764,6 +1683,7 @@ function placeTrees(bx, bz) {
         cell.roll = stream;
         for (const put of pool.entry.place(cell, propKit) ?? []) {
           if (pool.count >= pool.capacity) break;
+          if (Math.abs(roadSide(put.x, put.z)) < ROAD.shoulder + VERGE + (pool.entry.obstacle?.radius ?? 1)) continue;
           const h = heightAt(put.x, put.z),
             scale = Array.isArray(put.scale) ? put.scale : [put.scale ?? 1, put.scale ?? 1, put.scale ?? 1];
           _q.setFromAxisAngle(_v3.set(0, 1, 0), put.yaw ?? 0);
@@ -1783,15 +1703,9 @@ function placeTrees(bx, bz) {
             });
         }
       }
-      // the tree line follows the snow line: trees thin out over the last
-      // 120 m below it and the first 60 m into the lowest snow
-      const treeline = snowLineAt(temp, h0) + 60;
       const grove = 2 + 4 * sstep(-0.25, 0.3, perlin2(ccx / 370, ccz / 370, seed ^ 0xc071));
       // This density cap keeps the entire ring inside its fixed allocation.
-      const count = Math.min(
-        3,
-        Math.floor(density * grove * (1 - sstep(treeline - 120, treeline, h0))),
-      );
+      const count = Math.min(3, Math.floor(density * grove));
       if (count <= 0 || mixTotal <= 0) continue;
       for (let k = 0; k < count && n < MAX_TREES; k++) {
         const ux = roll(),
@@ -1815,6 +1729,8 @@ function placeTrees(bx, bz) {
         const sc = spec.scale[0] + us * (spec.scale[1] - spec.scale[0]),
           tall = sc * (0.9 + uz * 0.4),
           angle = ux * 6.283;
+        // a crown may lean over the verge, a trunk may not stand in it
+        if (Math.abs(roadSide(px, pz)) < ROAD.shoulder + VERGE + sc * pool.radius * 0.35) continue;
         _q.setFromAxisAngle(_v3.set(0, 1, 0), angle);
         _m4.compose(_v3.set(px, h, pz), _q, _s3.set(sc, tall, sc));
         pool.wood.setMatrixAt(pool.count, _m4);
@@ -1845,6 +1761,7 @@ function placeTrees(bx, bz) {
           ground: h,
           top: h + pool.top * tall,
           radius: sc * pool.radius,
+          trunk: sc * spec.trunk.radius + 0.3,
           species: pool.id,
         });
         n++;
@@ -1869,7 +1786,7 @@ function placeTrees(bx, bz) {
     if (pool.mesh.instanceColor) pool.mesh.instanceColor.needsUpdate = true;
   }
   updateGroundAO(cx * TREE_CELL, cz * TREE_CELL);
-  placeRuins(bx, bz);
+  placeSites(bx, bz);
 }
 
 // ---------------------------------------------------------------------------
@@ -1913,7 +1830,7 @@ grassMat.positionNode = positionLocal.add(
 );
 const grassGeo = new THREE.PlaneGeometry(2.6, 1);
 grassGeo.translate(0, 0.5, 0);
-const grass = new THREE.InstancedMesh(grassGeo, grassMat, 20000);
+const grass = new THREE.InstancedMesh(grassGeo, grassMat, LITE ? 8000 : 20000);
 grass.count = 0;
 grass.frustumCulled = false;
 grass.receiveShadow = true;
@@ -1953,7 +1870,7 @@ function placeGrass(x, z) {
           angle = r() * Math.PI,
           keep = r() < thickness;
         const h = heightAt(px, pz);
-        if (!keep || h < 2 || h > 480 || slopeAt(px, pz) > 0.65) continue;
+        if (!keep || h < 2 || slopeAt(px, pz) > 0.65 || Math.abs(roadSide(px, pz)) < ROAD.shoulder + 0.6) continue;
         _q.setFromAxisAngle(_v3.set(0, 1, 0), angle);
         _m4.compose(_v3.set(px, h, pz), _q, _s3.setScalar(scale));
         grass.setMatrixAt(count, _m4);
@@ -1966,9 +1883,10 @@ function placeGrass(x, z) {
 }
 
 // ---------------------------------------------------------------------------
-// Ruins of one lost civilization. Rare sites of the same weathered masonry,
-// found on a sparse grid, sunk and tilted by their age, mossy at the foot.
-// Rings and gates face the sunrise. Nothing announces them.
+// Old stone: watchtowers and churches of coral stone, rare sites of the same
+// weathered masonry, found on a sparse grid near the road, sunk and tilted by
+// their age, mossy at the foot. Watchtowers face the sunrise, toward the sea.
+// Nothing announces them.
 // ---------------------------------------------------------------------------
 const STONE = {
   warm: C(SWATCH.stoneWarm),
@@ -1976,7 +1894,7 @@ const STONE = {
   dark: C(SWATCH.stoneDark),
   moss: C(SWATCH.moss),
 };
-// The masonry kit every ruin type is built from: tapered pillars, blocks
+// The masonry kit every site type is built from: tapered pillars, blocks
 // and slabs, each a little worn, sunk and leaning. Builders only compose it.
 function masonryKit(parts, r) {
   const tone = () => C(0).copy(STONE.warm).lerp(STONE.cool, r()).lerp(STONE.dark, r() * 0.35);
@@ -1997,7 +1915,7 @@ function masonryKit(parts, r) {
   return {
     THREE,
     random: r,
-    color: (value) => libraryColor('ruin color', value),
+    color: (value) => libraryColor('site color', value),
     raw(g, x, y, z, yaw = 0, tilt = 0, roll = 0) {
       place(g, x, y, z, yaw, tilt, roll);
     },
@@ -2027,7 +1945,7 @@ function masonryKit(parts, r) {
     },
   };
 }
-function bakeRuin(type) {
+function bakeSite(type) {
   const parts = [],
     r = mulberry32(0x5e77 + type.id.length * 977 + type.id.charCodeAt(0));
   const kit = masonryKit(parts, r);
@@ -2049,11 +1967,11 @@ function bakeRuin(type) {
   return geometry;
 }
 const SITES_PER_TYPE = BUDGET.siteInstances;
-const ruinMat = propMaterial();
-ruinMat.positionNode = grown(positionLocal);
-const ruinPools = RUINS.map((type) => {
-  const geometry = bakeRuin(type);
-  const mesh = new THREE.InstancedMesh(geometry, ruinMat, SITES_PER_TYPE);
+const siteMat = propMaterial();
+siteMat.positionNode = grown(positionLocal);
+const sitePools = SITES.map((type) => {
+  const geometry = bakeSite(type);
+  const mesh = new THREE.InstancedMesh(geometry, siteMat, SITES_PER_TYPE);
   const base = new THREE.InstancedBufferAttribute(new Float32Array(SITES_PER_TYPE * 3), 3);
   base.setUsage(THREE.DynamicDrawUsage);
   mesh.geometry.setAttribute('base', base);
@@ -2064,15 +1982,15 @@ const ruinPools = RUINS.map((type) => {
   scene.add(mesh);
   return { type, mesh, height: geometry.boundingBox.max.y, count: 0 };
 });
-const ruinRecords = [];
+const siteRecords = [];
 // Sites are found, not scattered: a sparse grid of cells, each with a small
 // chance of holding one, and the site must fit its ground. The same cell
 // always holds the same site, so a place seen once is there when you return.
-function placeRuins(bx, bz) {
-  ruinRecords.length = 0;
-  for (const pool of ruinPools) pool.count = 0;
+function placeSites(bx, bz) {
+  siteRecords.length = 0;
+  for (const pool of sitePools) pool.count = 0;
   const reach = TREE_RADIUS + SITE_CELL,
-    oddsTotal = RUINS.reduce((sum, type) => sum + type.odds, 0);
+    oddsTotal = SITES.reduce((sum, type) => sum + type.odds, 0);
   const c0x = Math.floor((bx - reach) / SITE_CELL),
     c1x = Math.floor((bx + reach) / SITE_CELL),
     c0z = Math.floor((bz - reach) / SITE_CELL),
@@ -2086,11 +2004,11 @@ function placeRuins(bx, bz) {
       // the biome's welcome, read at the cell center, scales the odds
       biomeAt(ccx, ccz, _weights);
       let welcome = 0;
-      for (let i = 0; i < BIOMES.length; i++) welcome += _weights[i] * BIOMES[i].ruins;
+      for (let i = 0; i < BIOMES.length; i++) welcome += _weights[i] * BIOMES[i].sites;
       if (r() > SITE_ODDS * welcome) continue;
       let pick = r() * oddsTotal,
-        pool = ruinPools[0];
-      for (const candidate of ruinPools) {
+        pool = sitePools[0];
+      for (const candidate of sitePools) {
         pick -= candidate.type.odds;
         if (pick <= 0) {
           pool = candidate;
@@ -2105,8 +2023,10 @@ function placeRuins(bx, bz) {
       for (let attempt = 0; attempt < 4; attempt++) {
         const px = (gx + 0.2 + r() * 0.6) * SITE_CELL,
           pz = (gz + 0.2 + r() * 0.6) * SITE_CELL;
-        const h = heightAt(px, pz);
-        if (h < 8 || slopeAt(px, pz) > type.slope) continue;
+        const h = heightAt(px, pz),
+          side = Math.abs(roadSide(px, pz));
+        // seen from the road, never on it
+        if (h < 8 || slopeAt(px, pz) > type.slope || side < type.footprint * scale + ROAD.shoulder + VERGE || side > 520) continue;
         // a hill site stands on a local top; a flat site on ground that stays level
         let fits = true;
         for (let k = 0; k < 8 && fits; k++) {
@@ -2119,7 +2039,7 @@ function placeRuins(bx, bz) {
         _m4.compose(_v3.set(px, h - sink, pz), _q, _s3.setScalar(scale));
         pool.mesh.setMatrixAt(pool.count, _m4);
         pool.mesh.geometry.attributes.base.setXYZ(pool.count++, px, h, pz);
-        ruinRecords.push({
+        siteRecords.push({
           x: px,
           z: pz,
           ground: h,
@@ -2130,14 +2050,14 @@ function placeRuins(bx, bz) {
         break;
       }
     }
-  for (const pool of ruinPools) {
+  for (const pool of sitePools) {
     pool.mesh.count = pool.count;
     pool.mesh.instanceMatrix.needsUpdate = true;
     pool.mesh.geometry.attributes.base.needsUpdate = true;
   }
 }
 
-// Clouds: painted sky below; soft volumes as the bird approaches the deck.
+// Clouds: painted sky below; soft volumes when the camera nears the deck.
 // ---------------------------------------------------------------------------
 const puffParts = [];
 {
@@ -2202,80 +2122,6 @@ function updateClouds(bx, bz, t) {
   clouds.instanceMatrix.needsUpdate = true;
 }
 // cloud sea: a heaped plane just under the deck, holes from noise, seen only from above
-// Spindrift off the high summits: every summit in the heightfield window
-// above PLUME.min (its own local maxima, rescanned every two seconds) carries
-// one soft ribbon streaming along the world wind, turned toward the camera
-// around the wind, colored by the day's cloud light, its body two scrolling
-// noises, dense at the summit and breaking into wisps downwind. Eight at most,
-// one draw call.
-const PLUME = { min: DECK_Y + 180, max: 8, length: 650, rise: 60, width: 180 };
-const plumeGeo = new THREE.PlaneGeometry(1, 2, 32, 1); // x along the wind, y across
-const plumeMat = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide });
-{
-  const wind = vec3(WIND.x, 0, WIND.y),
-    windPerp = vec3(WIND_PERP.x, 0, WIND_PERP.y);
-  const base = attribute('base', 'vec3');
-  // the ribbon coordinates come from the immutable geometry attribute, never
-  // from positionLocal, which this material has already moved to the summit
-  const ribbon = attribute('position', 'vec3');
-  const uV = ribbon.x.add(0.5),
-    vV = ribbon.y;
-  const toCam = normalize(cameraPosition.sub(base));
-  const side = normalize(cross(wind, toCam).add(windPerp.mul(0.12)));
-  const width = uV.pow(0.6).mul(0.85).add(0.15).mul(PLUME.width);
-  const lift = uV.mul(PLUME.rise).add(sin(uV.mul(7.0).add(time.mul(0.9))).mul(uV.mul(16.0)));
-  plumeMat.positionNode = base.add(wind.mul(uV.mul(PLUME.length))).add(vec3(0, 1, 0).mul(lift)).add(side.mul(vV.mul(width)));
-  const u = varying(uV),
-    v = varying(vV),
-    idx = varying(instanceIndex.toFloat());
-  // cloud white at the summit, taking the shade's blue as it thins downwind
-  plumeMat.colorNode = mix(uCloudWhite, mix(uHorizon, SNOW.shade, 0.5), u.mul(0.6));
-  const body = mx_noise_float(vec3(u.mul(6.0).sub(time.mul(0.45)), v.mul(2.2).add(idx.mul(3.7)), time.mul(0.1)))
-    .mul(2.0)
-    .add(mx_noise_float(vec3(u.mul(14.0).sub(time.mul(0.8)), v.mul(5.0), idx)));
-  const thinning = float(1).sub(smoothstep(0.3, 1.0, u));
-  plumeMat.opacityNode = smoothstep(float(-0.6).sub(thinning.mul(0.5)), 0.5, body)
-    .mul(smoothstep(0.0, 0.06, u))
-    .mul(thinning.pow(1.3))
-    .mul(float(1).sub(v.mul(v)).pow(0.6))
-    .mul(0.95)
-    .mul(float(1).sub(uNight.mul(0.5)));
-}
-const plumes = new THREE.InstancedMesh(plumeGeo, plumeMat, PLUME.max);
-plumes.geometry.setAttribute('base', new THREE.InstancedBufferAttribute(new Float32Array(PLUME.max * 3), 3));
-plumes.frustumCulled = false;
-plumes.renderOrder = 3;
-plumes.count = 0;
-scene.add(plumes);
-let plumeScanAt = -1e9;
-function updatePlumes(t) {
-  // every two seconds of simulation time, and at once when the clock is set back
-  if (t >= plumeScanAt && t - plumeScanAt < 2) return;
-  plumeScanAt = t;
-  const found = [];
-  for (let iz = hfCz - N / 2 + 8; iz < hfCz + N / 2 - 8; iz++)
-    for (let ix = hfCx - N / 2 + 8; ix < hfCx + N / 2 - 8; ix++) {
-      const h = texel(ix, iz, 0);
-      if (h < PLUME.min) continue;
-      let top = true;
-      for (let dz = -8; dz <= 8 && top; dz++)
-        for (let dx = -8; dx <= 8; dx++)
-          if ((dx || dz) && texel(ix + dx, iz + dz, 0) >= h) {
-            top = false;
-            break;
-          }
-      if (top) found.push({ x: ix * CELL, z: iz * CELL, h });
-    }
-  found.sort((a, b) => b.h - a.h);
-  const attr = plumes.geometry.attributes.base;
-  let n = 0;
-  for (const s of found) {
-    if (n >= PLUME.max) break;
-    attr.setXYZ(n++, s.x, s.h + 4, s.z);
-  }
-  attr.needsUpdate = true;
-  plumes.count = n;
-}
 let seaMat;
 {
   // The cloud surface is atmosphere, not land inside its own height fog.
@@ -2335,38 +2181,73 @@ cloudSea.renderOrder = 2;
 scene.add(cloudSea);
 
 // ---------------------------------------------------------------------------
-// Birds. Every kind in library/birds/ is data over the bird kit in
-// src/birds.js: a body and two wings of three hinged segments with painted
-// primaries, and a flight profile the hinges follow. The engine makes the
-// meshes, lights them with its own soft material, measures each kind against
-// its budget by name, keeps the flock the bird's own kind, and drives the
-// hinges. The viewer picks a kind in the corner, never before Begin, and the
-// page remembers it with the other settings; the registry's first is the
-// default.
+// The bike. src/bike.js lays out the GNEGR motorcycle and its rider in the
+// colors of a paint from library/paints/; the engine makes the meshes, lights
+// them with its own soft material, measures the bike against its budget, and
+// spins the wheels. The viewer picks a paint in the corner, never before
+// Begin, and the page remembers it; the registry's first is the default.
 // ---------------------------------------------------------------------------
-const birdMaterial = propMaterial({ basic: { side: THREE.DoubleSide } });
-const birdKit = { THREE, merge: mergeParts, M };
-let birdKindId = BIRD[storedSettings.bird] ? storedSettings.bird : BIRDS[0].id;
-// The plumage is a second remembered field; null is the kind's own colors.
-let plumageId = catalog.has(storedSettings.plumage) ? storedSettings.plumage : null;
-const birdsMeasured = new Set();
-function dressBird(g, kindId, size = 1, plumage = plumageId) {
-  for (const child of [...g.children]) {
-    g.remove(child);
+const bikeMaterial = propMaterial();
+const bikeKit = { THREE, merge: mergeParts, M };
+let paintId = PAINT[storedSettings.paint] ? storedSettings.paint : PAINTS[0].id;
+const paintsMeasured = new Set();
+let bikeTriangles = 0;
+const bike = new THREE.Group();
+bike.rotation.order = 'YXZ'; // heading, then pitch, then lean
+function dressBike(id) {
+  for (const child of [...bike.children]) {
+    bike.remove(child);
     child.traverse((o) => o.isMesh && o.geometry.dispose());
   }
-  const kind = BIRD[kindId];
-  // the kind in this plumage: recolored data for the kit, then the marking painted over
-  const variant = catalog.variantOf(kind, plumage);
-  const built = paintMarking(buildBird(variant.kind, birdKit), kind, variant.marking, variant.plumage?.accent);
-  if (!birdsMeasured.has(variant.id)) {
-    // one kind is one budget: body and wings together, judged by entry name
-    const whole = mergeParts([{ geometry: built.body }, ...built.wings.flatMap((w) => w.segments.map((seg) => ({ geometry: seg.geometry })))]);
-    const errors = validateBaked(kind, whole);
+  const paint = PAINT[id],
+    built = buildBike(paint, bikeKit);
+  if (!paintsMeasured.has(id)) {
+    const whole = mergeParts([{ geometry: built.body }, ...built.nodes.filter((n) => n.geometry).map((n) => ({ geometry: n.geometry }))]);
+    const errors = validateBaked({ ...paint, budget: { triangles: BIKE.triangles } }, whole);
+    bikeTriangles = whole.attributes.position.count / 3;
     whole.dispose();
     if (errors.length) throw new Error('scenery library: ' + errors.join('; '));
-    birdsMeasured.add(variant.id);
+    paintsMeasured.add(id);
   }
+  bike.add(new THREE.Mesh(built.body, bikeMaterial));
+  // the hinged tree: each node a group at its pivot, parents first
+  const rig = {};
+  for (const node of built.nodes) {
+    const g = new THREE.Group();
+    g.position.set(...node.at);
+    if (node.rotation) g.rotation.set(...node.rotation);
+    if (node.geometry) g.add(new THREE.Mesh(node.geometry, bikeMaterial));
+    (node.parent ? rig[node.parent] : bike).add(g);
+    rig[node.id] = g;
+  }
+  bike.userData.rig = rig;
+  bike.userData.THREE = THREE;
+  bike.traverse((o) => {
+    if (o.isMesh) o.castShadow = o.receiveShadow = true;
+  });
+  bike.userData.paint = id;
+}
+dressBike(paintId);
+scene.add(bike);
+function setPaint(id) {
+  if (!PAINT[id]) throw new Error('unknown paint: ' + id);
+  paintId = id;
+  dressBike(id);
+  showPaint();
+  saveSettings();
+  if (!running || paused) {
+    last = performance.now();
+    renderer.setAnimationLoop(frame);
+  }
+}
+
+// The flock: now and then a loose line of egrets keeps the bike company for
+// a while, over the fields beside the road, then peels away.
+const birdMaterial = propMaterial({ basic: { side: THREE.DoubleSide } });
+const birdKit = { THREE, merge: mergeParts, M };
+function makeBird(kind) {
+  const g = new THREE.Group();
+  const built = buildBird(kind, birdKit);
   g.add(new THREE.Mesh(built.body, birdMaterial));
   const wings = [];
   for (const wing of built.wings) {
@@ -2382,71 +2263,43 @@ function dressBird(g, kindId, size = 1, plumage = plumageId) {
     }
     wings.push({ s: wing.s, pivots });
   }
-  g.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
-  g.scale.setScalar((kind.scale ?? 1) * size);
-  g.userData.kind = kind;
-  g.userData.kindId = kindId;
-  g.userData.variant = variant;
-  g.userData.wings = wings;
-  g.userData.phase = Math.random() * 6.28;
-  g.userData.flapAmp = 0.1;
-  return g;
-}
-function makeBird(kindId, size = 1, plumage = plumageId) {
-  const g = new THREE.Group();
-  dressBird(g, kindId, size, plumage);
+  g.traverse((o) => o.isMesh && (o.castShadow = true));
+  g.scale.setScalar((kind.scale ?? 1) * kind.flock.scale);
+  Object.assign(g.userData, { kind, wings, phase: Math.random() * 6.28, flapAmp: 0.1 });
   g.rotation.order = 'YXZ';
+  g.visible = false;
   return g;
 }
-const animateWings = animateBird;
-const bird = makeBird(birdKindId);
-scene.add(bird);
-// how far the kind hangs under its center, in world meters: legs, a long tail
-const birdBelow = () => (bird.userData.kind.below ?? 0) * bird.scale.y;
-
-// companions for the flock moments, always the bird's own kind
+const flockKind = BIRDS[0];
+{
+  const whole = buildBird(flockKind, birdKit);
+  const merged = mergeParts([{ geometry: whole.body }, ...whole.wings.flatMap((w) => w.segments.map((seg) => ({ geometry: seg.geometry })))]);
+  const errors = validateBaked(flockKind, merged);
+  merged.dispose();
+  whole.body.dispose();
+  for (const w of whole.wings) for (const seg of w.segments) seg.geometry.dispose();
+  if (errors.length) throw new Error('scenery library: ' + errors.join('; '));
+}
 const companions = [];
-for (let i = 0; i < 5; i++) {
-  const b = makeBird(birdKindId, BIRD[birdKindId].flock.scale, catalog.flock(plumageId, i));
-  b.visible = false;
-  scene.add(b);
-  companions.push(b);
-}
-// The viewer's choice: every bird on the page becomes the kind, the page
-// remembers it, and a paused or waiting page shows it at once.
-function setBirdKind(kindId, plumage = plumageId) {
-  if (!BIRD[kindId]) throw new Error('unknown bird: ' + kindId);
-  if (plumage !== null && !catalog.has(plumage)) throw new Error('unknown plumage: ' + plumage);
-  birdKindId = kindId;
-  plumageId = plumage;
-  dressBird(bird, kindId, 1, plumage);
-  // the flock is the bird's kind, in its plumage with a real flock's drift
-  companions.forEach((b, i) => dressBird(b, kindId, BIRD[kindId].flock.scale, catalog.flock(plumage, i)));
-  showBird();
-  saveSettings();
-  if (!running || paused) {
-    last = performance.now();
-    renderer.setAnimationLoop(frame);
+if (flockKind)
+  for (let i = 0; i < 6; i++) {
+    const b = makeBird(flockKind);
+    scene.add(b);
+    companions.push(b);
   }
-}
 const formation = [
-  [-9, -1, -7],
-  [9, -1.5, -7],
-  [-17, 1, -14],
-  [17, 0.5, -14],
-  [-25, 2, -21],
+  [0, 0, 0],
+  [-4, 1, -6],
+  [5, -0.5, -9],
+  [-9, 2, -14],
+  [10, 1, -17],
+  [-2, 3, -23],
 ];
 
 // ---------------------------------------------------------------------------
-// Sky events. While the sun or the moon crosses the horizon the bird turns to
-// fly straight at it and holds that course until the sky settles, unless the
-// viewer steers it away; then it is free until the next event. The crossings
-// are found on the same arcs the sky draws, so they cannot drift from it.
+// Sky events: the sun's and the moon's horizon crossings, found on the same
+// arcs the sky draws. The watchtowers face the sunrise; night is the span
+// from sunset to sunrise.
 // ---------------------------------------------------------------------------
 const SKY_EVENTS = (() => {
   const sun = new THREE.Vector3(),
@@ -2454,14 +2307,6 @@ const SKY_EVENTS = (() => {
   const height = (body, phase) => {
     skyBodies(phase, sun, moon);
     return (body === 'sun' ? sun : moon).y;
-  };
-  // How long before and after the crossing the pull lasts, in solar phase, the
-  // sun's own clock, so it is about how high the body stands: a rising body
-  // from its first glow until it stands clear, a setting one from its last
-  // stretch until the afterglow fades, the moon only while its disc is low.
-  const spans = {
-    sun: { rising: [0.035, 0.07], setting: [0.02, 0.045] },
-    moon: { rising: [0.012, 0.03], setting: [0.035, 0.004] },
   };
   const events = [];
   const steps = 720;
@@ -2477,10 +2322,8 @@ const SKY_EVENTS = (() => {
           if (height(body, mid) < 0 === previous < 0) lo = mid;
           else hi = mid;
         }
-        const rising = next > previous;
-        const [before, after] = spans[body][rising ? 'rising' : 'setting'];
         const phase = (lo + hi) / 2;
-        events.push({ body, rising, phase, solar: solar(phase), before, after });
+        events.push({ body, rising: next > previous, phase, solar: solar(phase) });
       }
       previous = next;
     }
@@ -2489,287 +2332,123 @@ const SKY_EVENTS = (() => {
 })();
 const SUNRISE = SKY_EVENTS.find((event) => event.body === 'sun' && event.rising);
 const SUNSET = SKY_EVENTS.find((event) => event.body === 'sun' && !event.rising);
-// Night, sunset to sunrise, on the same crossings the events were found on.
 const NIGHT_SPAN = (((SUNRISE.phase - SUNSET.phase) % 1) + 1) % 1;
 const isNight = (phase) => ((((phase - SUNSET.phase) % 1) + 1) % 1) < NIGHT_SPAN;
 const SUNRISE_AZIMUTH = (() => {
   skyBodies(SUNRISE.phase, _v3, _s3);
   return Math.atan2(_v3.x, _v3.z);
 })();
-const SKY_FADE = 0.015; // solar phase over which a pull comes and goes
-function skyEventWeight(event, phase) {
-  const s = solar(phase) - event.solar;
-  const d = s - Math.round(s);
-  const arriving = sstep(-event.before - SKY_FADE, -event.before, d),
-    leaving = sstep(event.after, event.after + SKY_FADE, d);
-  return arriving * (1 - leaving);
-}
-const sunward = { event: null, pull: 0, heading: 0, released: false };
-function updateSunward() {
-  let pull = 0,
-    event = null;
-  for (const candidate of SKY_EVENTS) {
-    const weight = skyEventWeight(candidate, dayPhase);
-    if (weight > pull) {
-      pull = weight;
-      event = candidate;
-    }
-  }
-  if (event !== sunward.event) sunward.released = false;
-  sunward.event = event;
-  sunward.pull = sunward.released ? 0 : pull;
-  if (event) {
-    const dir = event.body === 'sun' ? _sunDir : _moonDir;
-    sunward.heading = Math.atan2(dir.x, dir.z);
-  }
-}
-// ---------------------------------------------------------------------------
-// The night's one turn. The Milky Way stands still over the world, so the
-// brightest place in it, the core the sky's own bake found, keeps one bearing.
-// Once night has begun, and once the sunset has let go of the bird, it turns to
-// face that core at the same gentle rate a sky event turns it, and lets go as
-// soon as it is facing it. It happens once a night: a single turn, not a course
-// it holds. A steer ends it, and the next nightfall arms it again.
-// ---------------------------------------------------------------------------
-const GALAXY_HEADING = Math.atan2(galaxy.brightest.x, galaxy.brightest.z);
-const NIGHTWARD = {
-  aligned: 0.03, // radians of heading that count as facing the core
-  fade: 1.2, // seconds the pull takes to come and go
-  give: 90, // seconds after which the turn gives up rather than hold the bird
-};
-const nightward = { night: null, armed: false, done: false, turning: false, pull: 0, since: 0, heading: GALAXY_HEADING };
-function updateNightward(dt) {
-  const night = isNight(dayPhase);
-  if (nightward.night !== night) {
-    // the first frame only reads where the day stands, so a flight resumed
-    // into a night that began without it is left alone
-    if (night && nightward.night !== null) {
-      nightward.armed = true;
-      nightward.done = false;
-      nightward.turning = false;
-    }
-    if (!night) nightward.armed = false;
-    nightward.night = night;
-  }
-  const holding = nightward.armed && !nightward.done;
-  // the sunset's own pull has the bird until the sky settles into night
-  if (holding && !nightward.turning && sunward.pull === 0) {
-    nightward.turning = true;
-    nightward.since = state.t;
-  }
-  if (
-    holding &&
-    nightward.turning &&
-    (Math.abs(wrapAngle(GALAXY_HEADING - state.heading)) < NIGHTWARD.aligned || state.t - nightward.since > NIGHTWARD.give)
-  )
-    nightward.done = true;
-  const want = nightward.armed && !nightward.done && nightward.turning ? 1 : 0;
-  nightward.pull = Math.max(0, Math.min(1, nightward.pull + (want ? dt : -dt) / NIGHTWARD.fade));
-}
-// The viewer took the reins: the current event lets go of the bird, so does the
-// night's one turn, and so does the opening.
-function releaseSunward() {
-  if (sunward.event) sunward.released = true;
-  nightward.done = true;
-  endIntro('steered');
-}
 
 // ---------------------------------------------------------------------------
-// Flight controller: rails with a gentle hand. The bird flies itself; a drag
-// turns it and aims its nose, and takes the vertical away from whatever the
-// flight had planned for as long as it is held and a moment after.
+// The ride: the bike rides itself, on the right-hand lane of the road, slower
+// into the bends and up the grades. A steer takes it wherever the viewer
+// points it, off the road and over the land too; let go, and after a moment
+// it turns back and rejoins the road, riding on the way it was facing.
 // ---------------------------------------------------------------------------
 const state = {
   x: 0,
-  y: 260,
+  y: 0,
   z: 0,
   heading: 0,
-  vy: 0,
-  bank: 0,
-  pitch: 0,
+  speed: RIDE.cruise,
   yawRate: 0,
-  nudgeYaw: 0,
-  nudgeAlt: 0,
+  lean: 0,
+  pitch: 0,
+  dir: 1, // which way along the road: +1 toward +z, -1 back
+  free: 0, // seconds the viewer's steer still holds the bike off its plan
   steer: 0, // heading change from steering, applied whole on the next frame
-  aim: 0, // climb angle the captain steered to, radians
-  aimHold: 0, // how much of the vertical is his, 1 while he steers
+  nudgeYaw: 0,
+  odometer: 0,
+  onRoad: 1,
   t: 0,
-  flapping: false,
-  flapTimer: 0,
-  flapBurst: 0,
   dragging: false,
-  dragButton: -1, // 0 orbits the camera, 2 steers the bird
+  dragButton: -1, // 0 orbits the camera, 2 steers the bike
   lastPX: 0,
   lastPY: 0,
 };
-// The captain has the stick while the steering button, or a touch, is held.
+// The viewer has the bars while the steering button, or a touch, is held.
 const steering = () => state.dragButton === 2;
-{
-  // A world's first flight opens with a scripted sunrise, so its start is
-  // chosen for that: over land at cruising height, in the open oak hills the
-  // page was approved in when they are within reach, on a course abeam of
-  // the sunrise whose turn toward it and climb stay over land and hills.
-  // The other biomes arrive as the flight goes on.
+// Where along the road a fresh world starts: on land, not on a causeway, on
+// gentle grades, in the coast or the paddies when either is in reach, so the
+// first sunrise lands over farmland or the sea.
+const START = (() => {
   const probe = [0, 0, 0, 0],
     weights = new Float32Array(BIOMES.length),
-    home = BIOMES.findIndex((biome) => biome.id === 'wildsong');
-  const homeAt = (x, z) => {
-    sampleWorld(x, z, probe);
-    biomeWeights(probe[1], probe[2], probe[3], weights);
-    return home < 0 ? 0 : weights[home];
-  };
-  let best = null;
+    liked = ['coast', 'paddies'].map((id) => BIOMES.findIndex((biome) => biome.id === id)).filter((i) => i >= 0);
   const r = mulberry32(seed ^ 0xbead);
-  for (let i = 0; i < 400; i++) {
-    const a = r() * 6.283,
-      d = 400 + r() * 11600;
-    const x = Math.cos(a) * d,
-      z = Math.sin(a) * d;
-    const here = homeAt(x, z),
-      h = probe[0];
-    const place = h > 20 && h < 260 ? 100 - Math.abs(h - 90) + 120 * here : -1e9;
-    for (const side of [-1, 1]) {
-      // the opening course: five seconds abeam of the sunrise, the same gentle
-      // turn a sunrise pulls, then straight at it, sampled every five seconds
-      const start = SUNRISE_AZIMUTH + (side * Math.PI) / 2;
-      let heading = start,
-        px = x,
-        pz = z,
-        score = place;
-      for (let k = 1; k <= 14; k++) {
-        if (k > 1) heading += Math.max(-1, Math.min(1, wrapAngle(SUNRISE_AZIMUTH - heading)));
-        px += Math.sin(heading) * SPEED * 5;
-        pz += Math.cos(heading) * SPEED * 5;
-        const w = homeAt(px, pz),
-          ground = probe[0];
-        score += 8 * w + (ground > 10 ? 1 : -8) - (ground > 320 ? 5 : 0);
-      }
-      if (best === null || score > best.score) best = { x, z, h, heading: start, score };
+  let best = null;
+  for (let i = 0; i < 120; i++) {
+    const z0 = Math.round((r() - 0.5) * 40000);
+    let score = 0;
+    for (let k = 0; k < 10; k++) {
+      const z = z0 + k * 70,
+        y = road.y(z),
+        grade = Math.abs(road.y(z + 16) - y) / 16;
+      world.sample(road.x(z) + 40, z, probe);
+      biomeWeights(probe[1], probe[2], probe[3], weights);
+      score += (y > ROAD.floor + 2 ? 1 : -6) - 20 * Math.max(0, grade - 0.06);
+      for (const j of liked) score += 2 * weights[j];
     }
+    if (best === null || score > best.score) best = { z: z0, score };
   }
-  state.x = best.x;
-  state.z = best.z;
-  state.y = Math.max(best.h, 0) + 170;
-  state.heading = wrapAngle(best.heading);
-}
+  return best.z;
+})();
+state.z = START;
+state.x = road.x(START) - Math.cos(road.heading(START)) * ROAD.lane;
+state.heading = road.heading(START);
 function n1(t, s) {
   return perlin2(t, 0.37, s);
 }
-// The highest ground, crown or stone along the path ahead. The path bends
-// with the current turn rate, so the look-ahead follows that arc rather
-// than a straight line, and the corridor is wider than the bird so a crown
-// beside the path lifts the bird before it is over it.
-const _ahead = [];
-function terrainAhead(dist) {
-  _ahead.length = 0;
-  const reach = dist + 60;
-  for (const records of [treeRecords, ruinRecords, propRecords])
-    for (const tree of records) {
-      const dx = tree.x - state.x,
-        dz = tree.z - state.z;
-      if (dx * dx + dz * dz < (reach + tree.radius) ** 2) _ahead.push(tree);
+// What the bike must keep clear of: trunks, the huts, the old stone.
+function pushClear() {
+  for (const records of [treeRecords, siteRecords, propRecords])
+    for (const o of records) {
+      const r = (o.trunk ?? o.radius) + 0.5,
+        dx = state.x - o.x,
+        dz = state.z - o.z,
+        d2 = dx * dx + dz * dz;
+      if (d2 >= r * r || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2);
+      state.x = o.x + (dx / d) * r;
+      state.z = o.z + (dz / d) * r;
     }
-  let h = -1e9,
-    px = state.x,
-    pz = state.z;
-  const step = 30;
-  for (let d = 0; d <= dist; d += step) {
-    if (d > 0) {
-      const heading = state.heading + (state.yawRate * d) / SPEED;
-      px += Math.sin(heading) * step;
-      pz += Math.cos(heading) * step;
-    }
-    h = Math.max(h, heightAt(px, pz));
-    for (const tree of _ahead) {
-      const margin = tree.radius + 18;
-      if ((tree.x - px) ** 2 + (tree.z - pz) ** 2 < margin * margin) h = Math.max(h, tree.top);
-    }
-  }
-  return h;
 }
-// The range's pyramids rise faster than the bird can climb, so the flight
-// looks further ahead than its clearance does: the altitude it needs now to
-// clear every point of the next two kilometres, along the arc of the current
-// turn, at four fifths of its own climb rate.
-function climbAhead(dist) {
-  let need = -1e9,
-    px = state.x,
-    pz = state.z;
-  const step = 60;
-  for (let d = step; d <= dist; d += step) {
-    const heading = state.heading + (state.yawRate * d) / SPEED;
-    px += Math.sin(heading) * step;
-    pz += Math.cos(heading) * step;
-    need = Math.max(need, heightAt(px, pz) + 40 - (d / SPEED) * CLIMB * 0.8);
-  }
-  return need;
-}
-let cloudSchedule = 0; // 0 = below the deck, 1 = above it
-// The schedule climbs through the deck for the last hundred seconds of every
-// three hundred, counted from this origin; the opening resets it so a full
-// low stretch follows the dive.
-let cloudOrigin = -150;
-let forceHigh = null,
-  forceLow = null;
 
 // ---------------------------------------------------------------------------
-// The opening. A world's first flight is scripted so that every new viewer
-// gets the same sunrise: ten seconds before it, flying abeam of the glow; a
-// turn to face the sun as it clears the horizon; a climb through the deck,
-// with the day stretched so the low sun still sits in the frame and lights
-// the cloud tops; a pause above them; a dive back under; then the flight is
-// its own. It touches only what the autonomous flight already steers by, the
-// yaw target and the cloud schedule, so the hand-off changes nothing else,
-// and a steer ends it the way a steer releases a sunrise pull. A resumed
-// flight never plays it.
+// The opening. A world's first ride starts on the road a few seconds before
+// sunrise, with the day stretched so the dawn lasts while the title comes up
+// and goes; then the day keeps its own pace. A steer ends the stretch. A
+// resumed ride never plays it.
 // ---------------------------------------------------------------------------
 const INTRO = {
-  beforeSunrise: 10, // seconds of dawn before the sun crosses
-  side: 5, // seconds abeam of the sunrise before the turn
-  climbAt: 13, // the turn is done and the sun is clear of the horizon
-  climbLimit: 75, // give up on the deck if the ground kept the bird down
-  aboveBy: 140, // meters over the deck that count as above the clouds
-  hold: 10, // seconds above the clouds
-  dive: 30, // seconds of descent before the flight is its own
-  stretch: 0.55, // day clock speed while the sun should stay low (the sun's own pace by day is two thirds)
+  beforeSunrise: 14, // seconds of dawn before the sun crosses
+  hold: 45, // seconds the day is stretched
+  stretch: 0.5, // day clock speed while it is
 };
 const intro = { beat: null, at: 0, ended: null };
 let dayRate = 1,
   dayRateTarget = 1;
 function updateIntro() {
   if (!intro.beat) return;
-  const t = state.t;
-  if (intro.beat === 'side' && t >= INTRO.side) intro.beat = 'pivot';
-  if (intro.beat === 'pivot' && t >= INTRO.climbAt) intro.beat = 'climb';
-  if (intro.beat === 'climb' && (state.y > DECK_Y + INTRO.aboveBy || t >= INTRO.climbLimit)) {
-    intro.beat = 'above';
-    intro.at = t;
-  }
-  if (intro.beat === 'above' && t >= intro.at + INTRO.hold) {
-    intro.beat = 'dive';
-    intro.at = t;
-  }
-  if (intro.beat === 'dive' && t >= intro.at + INTRO.dive) endIntro('flown');
-  dayRateTarget = intro.beat === 'climb' || intro.beat === 'above' ? INTRO.stretch : 1;
+  if (state.t >= INTRO.hold) endIntro('ridden');
+  dayRateTarget = intro.beat ? INTRO.stretch : 1;
 }
 function endIntro(how) {
   if (!intro.beat) return;
   intro.beat = null;
   intro.ended = how;
-  cloudOrigin = state.t;
   dayRateTarget = 1;
 }
-// The title card. Three seconds into the turn toward the sunrise, "Kun Chen
-// Presents" and then "Fly With Me" come up out of a soft blur, hold while the
-// sun clears the horizon and the bird faces it, and are gone before the
-// climb reaches the clouds. It belongs to the opening: it starts on its beat
-// only while the opening is still playing, and once started it finishes even
-// if the viewer steers, since a card cut off halfway reads as a fault. It runs
-// on the simulation clock, so a pause holds it and the checks can step through it.
+// The title card. A few seconds into the ride, "Niño Redoble presents" and
+// then "The Long Ride" come up out of a soft blur, hold while the sun comes
+// up, and go. It belongs to the opening: it starts on its beat only while the
+// opening is still playing, and once started it finishes even if the viewer
+// steers, since a card cut off halfway reads as a fault. It runs on the
+// simulation clock, so a pause holds it and the checks can step through it.
 const TITLE = {
-  at: INTRO.side + 3, // seconds after Begin: three seconds into the turn toward the sun
+  at: 4, // seconds after Begin
   presents: [0, 2.6], // seconds after `at` over which the small line comes up
-  name: [1.6, 5.6], // the title, fully up a few seconds after the sun crests
+  name: [1.6, 5.6], // the title, fully up a few seconds later
   out: [11.5, 15], // both fade away
 };
 const title = { started: false, done: false, presents: 0, name: 0 };
@@ -2799,180 +2478,105 @@ function updateTitle() {
   }
   if (t >= TITLE.out[1]) title.done = true;
 }
-// Now and then the bird drops for a low pass over gentle ground, then climbs back.
-const flight = { lowNext: 160, lowUntil: 0, low: false, lowAmount: 0 };
-function updateFlight(dt) {
+// The viewer took the bars: the plan lets go for a while, and so does the opening.
+function takeBars() {
+  state.free = RIDE.hold;
+  endIntro('steered');
+}
+const _front = new THREE.Vector3();
+function updateRide(dt) {
   state.t += dt;
   updateIntro();
-  // where the schedule wants us: a slow climb through the deck every few
-  // minutes, or where the opening is in its script
-  const cyc = (((state.t - cloudOrigin) % 300) + 300) % 300;
-  const wantHigh =
-    forceHigh !== null
-      ? forceHigh
-      : intro.beat
-        ? intro.beat === 'climb' || intro.beat === 'above'
-          ? 1
-          : 0
-        : cyc > 200
-          ? 1
-          : 0;
-  cloudSchedule += (wantHigh - cloudSchedule) * Math.min(1, dt * 0.5);
-  // heading: slow noise, a low sun or moon to fly at, the captain's nudge, and
-  // steering that turns the bird directly
-  const wander = 0.22 * n1(state.t * 0.045 + 3.1, S2 + 5) + 0.08 * n1(state.t * 0.19, S2 + 9);
-  updateSunward();
-  updateNightward(dt);
-  // one thing pulls at a time: a sky event first, then the night's one turn
-  const pull = Math.max(sunward.pull, nightward.pull);
-  const pulled = sunward.pull >= nightward.pull ? sunward.heading : nightward.heading;
-  const toward = Math.max(-0.2, Math.min(0.2, wrapAngle(pulled - state.heading) * 0.5));
-  let yawRateTarget = wander * (1 - pull) + toward * pull + state.nudgeYaw;
-  if (intro.beat) {
-    // the opening holds its course abeam of the sunrise, then turns at the
-    // same gentle rate a sunrise pulls and flies straight at the sun
-    const sunHeading = Math.atan2(_sunDir.x, _sunDir.z);
-    yawRateTarget =
-      intro.beat === 'side' ? 0 : Math.max(-0.2, Math.min(0.2, wrapAngle(sunHeading - state.heading) * 0.5));
-  }
-  state.yawRate += (yawRateTarget - state.yawRate) * Math.min(1, dt * 1.5);
-  // Steering turns the bird one to one with the mouse, and the camera with it.
+  const side = road.distance(state.x, state.z);
+  state.onRoad = 1 - sstep(ROAD.shoulder, ROAD.shoulder + 6, Math.abs(side));
+  // Steering turns the bike one to one with the mouse, and the camera with
+  // it: the bike turns to face the way the camera looks, while the camera
+  // itself holds still in the world.
   let turn = state.steer;
   state.steer = 0;
   if (steering()) {
-    // Steering from the camera's point of view: the bird turns to face the way
-    // the camera looks, while the camera itself holds still in the world.
     const give = cam.yaw * Math.min(1, dt * 4);
     cam.yaw -= give;
     turn += give;
-  }
+    state.free = RIDE.hold;
+  } else if (state.free > 0 && !state.dragging) state.free = Math.max(0, state.free - dt);
+  if (Math.abs(state.nudgeYaw) > 0.02) state.free = Math.max(state.free, 0.5);
+  // The plan: pure pursuit of a point on the right-hand lane a second or so
+  // ahead, along the road the way the bike faces. It steers the bike back to
+  // the road from wherever the viewer left it.
+  const s = road.slope(state.z);
+  if (state.free > 0) state.dir = Math.cos(wrapAngle(state.heading - Math.atan2(s, 1))) >= 0 ? 1 : -1;
+  const foot = state.z - ((state.x - road.x(state.z)) * s) / (1 + s * s);
+  const look = Math.max(12, state.speed * RIDE.look) + Math.min(60, Math.abs(side) * 0.5);
+  const zt = foot + (state.dir * look) / Math.sqrt(1 + s * s);
+  const ht = road.heading(zt) + (state.dir < 0 ? Math.PI : 0);
+  const tx = road.x(zt) - Math.cos(ht) * ROAD.lane,
+    tz = zt + Math.sin(ht) * ROAD.lane;
+  const want = wrapAngle(Math.atan2(tx - state.x, tz - state.z) - state.heading);
+  const planned = Math.max(-RIDE.turn, Math.min(RIDE.turn, want * (2.4 * state.speed) / look));
+  const plan = state.free > 0 ? 0 : 1;
+  const yawRateTarget = planned * plan + state.nudgeYaw;
+  state.yawRate += (yawRateTarget - state.yawRate) * Math.min(1, dt * 4);
   state.heading = wrapAngle(state.heading + state.yawRate * dt + turn);
-  const steerRate = Math.max(-1.2, Math.min(1.2, (turn / dt) * 0.6));
-  // altitude: cruise above the terrain ahead, higher when the schedule says so,
-  // lower during a pass over ground that stays gentle for a while ahead
-  const here = Math.max(heightAt(state.x, state.z), SEA_LEVEL);
-  const gentle = terrainAhead(1100) < here + 70 && here < 420;
-  const lowWindow =
-    forceLow !== null ? forceLow > 0 : flight.low ? state.t < flight.lowUntil : state.t > flight.lowNext;
-  if (!flight.low && lowWindow && wantHigh === 0 && cloudSchedule < 0.05 && gentle && !intro.beat && !state.aimHold) {
-    flight.low = true;
-    flight.lowUntil = state.t + 45 + Math.random() * 35;
-  }
-  if (flight.low && (!lowWindow || wantHigh === 1)) {
-    flight.low = false;
-    flight.lowNext = state.t + 170 + Math.random() * 130;
-  }
-  const wantLow = flight.low && gentle ? 1 : 0;
-  flight.lowAmount += (wantLow - flight.lowAmount) * Math.min(1, dt * (wantLow ? 0.16 : 0.35));
-  const low = flight.lowAmount;
-  const ahead = terrainAhead(520),
-    wall = climbAhead(2200);
-  const cruise = Math.max(
-    ahead + 110 - 80 * low + 40 * (1 - 0.6 * low) * n1(state.t * 0.03, S1 + 4),
-    SEA_LEVEL + 55 - 32 * low,
-  );
-  const high = DECK_Y + 190 + 30 * n1(state.t * 0.05, S1 + 8);
-  let target = cruise + (high - Math.min(cruise, high)) * cloudSchedule + state.nudgeAlt;
-  target = Math.max(target, ahead + 18, heightAt(state.x, state.z) + 28, wall);
-  // A low pass follows the ground more eagerly: the gap the bird settles
-  // into over falling ground is the ground's descent rate over this gain.
-  let vyTarget = Math.max(-16, Math.min(CLIMB, (target - state.y) * (0.12 + 0.2 * low)));
-  // The captain's aim overrides whatever the flight had planned: while he has
-  // the stick, and for a moment after, the nose he set is the only thing that
-  // moves the bird up or down, inside the same envelope, the same clearance
-  // over the ground ahead, and a ceiling over the cloud sea. Then the flight
-  // takes the altitude back from where he left it.
-  if (state.aimHold > 0) {
-    const aimed = Math.max(-16, Math.min(CLIMB, Math.sin(state.aim) * SPEED));
-    vyTarget += (aimed - vyTarget) * state.aimHold;
-    vyTarget = Math.min(vyTarget, (AIM.ceiling - state.y) * AIM.brake);
-    vyTarget = Math.max(vyTarget, (Math.max(ahead + 18, here + 28, wall) - state.y) * AIM.brake);
-    if (!steering()) {
-      state.aimHold = Math.max(0, state.aimHold - dt / AIM.release);
-      if (state.aimHold === 0) {
-        state.aim = 0;
-        // a crossing stands a while longer if he left the bird over the deck;
-        // under it, a full low stretch follows
-        cloudOrigin = state.t - (state.y > DECK_Y ? 210 : 0);
+  // Speed: the cruise on the road, slower into a bend by the grip it can
+  // take, a little slower up a grade, and slow over open ground.
+  const bend = Math.abs(wrapAngle(road.heading(foot + state.dir * 60) - road.heading(foot))) / 60 + 1e-4;
+  const grade = (road.y(foot + state.dir * 20) - road.y(foot)) / 20;
+  let vTarget = Math.min(RIDE.cruise, Math.sqrt(RIDE.grip / bend)) * (1 - Math.min(0.3, Math.max(0, grade) * 2));
+  vTarget = vTarget * state.onRoad + RIDE.rough * (1 - state.onRoad);
+  if (Math.abs(turn) / dt > 1.5) vTarget = Math.min(vTarget, RIDE.rough);
+  state.speed += Math.max(-4 * dt, Math.min(2 * dt, vTarget - state.speed));
+  // Move, never into the sea: a shore turns the bike along it.
+  let fx = Math.sin(state.heading),
+    fz = Math.cos(state.heading);
+  const step = state.speed * dt;
+  if (heightAt(state.x + fx * (step + 2), state.z + fz * (step + 2)) < RIDE.wade) {
+    let found = 0;
+    for (const a of [0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.4, -2.4]) {
+      const h = state.heading + a;
+      if (heightAt(state.x + Math.sin(h) * (step + 2), state.z + Math.cos(h) * (step + 2)) >= RIDE.wade) {
+        found = a;
+        break;
       }
     }
-  }
-  // Pulling up answers faster than settling down, so a canopy or a wall
-  // entering the look-ahead lifts the bird before the clearance clamp must.
-  state.vy += (vyTarget - state.vy) * Math.min(1, dt * (vyTarget > state.vy ? 2.6 : 0.9));
-  // move
-  const fx = Math.sin(state.heading),
+    state.heading = wrapAngle(state.heading + found * Math.min(1, dt * 3));
+    fx = Math.sin(state.heading);
     fz = Math.cos(state.heading);
-  state.x += fx * SPEED * dt;
-  state.z += fz * SPEED * dt;
-  state.y += state.vy * dt;
-  state.y = Math.max(state.y, obstacleFloor(state.x, state.z) + 8 + birdBelow());
-  // pose: roll leads yaw, pitch follows climb
-  const bankTarget = -(state.yawRate + steerRate) * 1.35;
-  state.bank += (bankTarget - state.bank) * Math.min(1, dt * 2.2);
-  const pitchTarget = Math.atan2(state.vy, SPEED) * 1.6;
-  state.pitch += (pitchTarget - state.pitch) * Math.min(1, dt * 2.0);
-  // flap bursts: when climbing, and now and then while gliding
-  state.flapTimer -= dt;
-  if (state.flapBurst > 0) {
-    state.flapBurst -= dt;
-    state.flapping = true;
-  } else if (state.vy > 2.5) {
-    state.flapping = true;
-  } else {
-    state.flapping = false;
-    if (state.flapTimer <= 0) {
-      state.flapBurst = 2.2 + Math.random() * 2;
-      state.flapTimer = 7 + Math.random() * 9;
-    }
+    if (!found || heightAt(state.x + fx * (step + 2), state.z + fz * (step + 2)) < RIDE.wade) state.speed *= Math.exp(-dt * 3);
   }
-  // nudge decay
-  if (!state.dragging) {
-    state.nudgeYaw *= Math.exp(-dt / 2.4);
-    state.nudgeAlt *= Math.exp(-dt / 3.5);
+  if (heightAt(state.x + fx * step, state.z + fz * step) >= RIDE.wade || heightAt(state.x, state.z) < RIDE.wade) {
+    state.x += fx * state.speed * dt;
+    state.z += fz * state.speed * dt;
   }
-
-  bird.position.set(state.x, state.y + Math.sin(state.t * 3.1) * (bird.userData.kind.flight.bob ?? 0.06), state.z);
-  bird.rotation.set(-state.pitch, state.heading, state.bank);
-  animateWings(bird, dt, state.flapping);
+  pushClear();
+  state.odometer += state.speed * dt;
+  // pose: the tyres stand on the drawn ground, the bike leans into its turn
+  const yf = heightAt(state.x + fx * BIKE.front, state.z + fz * BIKE.front),
+    yr = heightAt(state.x + fx * BIKE.rear, state.z + fz * BIKE.rear);
+  state.y = (yf + yr) / 2;
+  const rough = (1 - state.onRoad) * 0.025 * Math.sin(state.t * 13.1) * Math.sin(state.t * 5.3 + 1);
+  state.pitch = Math.atan2(yf - yr, BIKE.base) + rough;
+  const leanTarget = Math.max(-0.6, Math.min(0.6, Math.atan((state.speed * (state.yawRate + turn / dt)) / 9.81)));
+  state.lean += (leanTarget - state.lean) * Math.min(1, dt * 3);
+  if (!state.dragging) state.nudgeYaw *= Math.exp(-dt / 1.6);
+  bike.position.set(state.x, state.y, state.z);
+  bike.rotation.set(-state.pitch, state.heading, -state.lean);
+  animateBike(bike, state.odometer, { lean: state.lean, yawRate: state.yawRate + turn / dt, t: state.t, rough: 1 - state.onRoad });
+  _front.set(fx, 0, fz);
 }
 
 // Pointer input follows the conventions of World of Warcraft's camera: the left
 // button orbits the camera and leaves it where you put it, the right button
 // steers, and the wheel zooms. Touch steers, since it has only one button.
 // Heading grows counter-clockwise seen from above, which is a left turn, so
-// rightward input subtracts: the view and the bird turn right, as in WoW.
-// Steering is both ways: sideways it turns the bird, up and down it lowers or
-// raises the view exactly as the left button does and aims the bird's nose the
-// same way at the same time, so the bird flies where the captain is looking.
-// The view stays where he leaves it, as every orbit does; the aim is his for as
-// long as he holds it and a moment after.
-const AIM = {
-  // The ends of the stick are the ends of the bird's own envelope: a full
-  // drag reaches its fastest climb or its fastest descent and no further, so
-  // the nose stays well short of anything like a loop and no travel is dead.
-  up: Math.asin(CLIMB / SPEED),
-  down: Math.asin(16 / SPEED),
-  release: 2.2, // seconds over which the flight takes the altitude back
-  ceiling: DECK_Y + 620, // where a steered climb eases off, over the deck and the tallest summit
-  brake: 0.35, // how firmly the ground ahead and the ceiling take the aim back
-};
-function aimBy(delta) {
-  state.aim = Math.max(-AIM.down, Math.min(AIM.up, state.aim + delta));
-  state.aimHold = 1;
-  // a low pass under way lets go of the bird, the way a pull does when steered
-  if (flight.low) {
-    flight.low = false;
-    flight.lowNext = state.t + 170 + Math.random() * 130;
-  }
-}
+// rightward input subtracts: the view and the bike turn right, as in WoW.
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
   if (!running || disposed) return;
   if (e.button !== 0 && e.button !== 2 && e.pointerType !== 'touch') return;
   state.dragging = true;
   state.dragButton = e.pointerType === 'touch' || e.button === 2 ? 2 : 0;
-  if (state.dragButton === 2) releaseSunward();
+  if (state.dragButton === 2) takeBars();
   state.lastPX = e.clientX;
   state.lastPY = e.clientY;
   try {
@@ -2987,15 +2591,12 @@ canvas.addEventListener('pointermove', (e) => {
     dy = e.clientY - state.lastPY;
   state.lastPX = e.clientX;
   state.lastPY = e.clientY;
-  // Either button lowers and raises the view the same way. The left one orbits
-  // sideways around the bird; the right one turns the bird and, with the view,
-  // aims its nose, so it flies where the captain is looking.
+  // Either button raises and lowers the view; the left one orbits sideways
+  // around the bike, the right one turns the bike.
   if (dy) cam.pitch = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, cam.pitch + dy * CAMERA.turnPerPixel));
   if (state.dragButton === 0) cam.yaw = wrapAngle(cam.yaw - dx * CAMERA.turnPerPixel);
-  else {
-    state.steer -= dx * CAMERA.turnPerPixel;
-    if (dy) aimBy(-dy * CAMERA.turnPerPixel);
-  }
+  else state.steer -= dx * CAMERA.turnPerPixel;
+  if (dx || dy) showView(-1);
 });
 const endDrag = () => {
   // either button can have moved the framing, and framing is remembered
@@ -3013,6 +2614,7 @@ canvas.addEventListener(
     if (!running) return;
     e.preventDefault();
     cam.dist = Math.max(CAMERA.minDist, Math.min(CAMERA.maxDist, cam.dist * Math.exp(e.deltaY * 0.0012)));
+    showView(-1);
     saveSettings();
   },
   { passive: false },
@@ -3026,42 +2628,45 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key.startsWith('Arrow')) e.preventDefault();
   if (paused) return;
-  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') releaseSunward();
-  if (e.key === 'ArrowLeft') state.nudgeYaw = 0.4;
-  if (e.key === 'ArrowRight') state.nudgeYaw = -0.4;
-  if (e.key === 'ArrowUp') state.nudgeAlt = 200;
-  if (e.key === 'ArrowDown') state.nudgeAlt = -180;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') takeBars();
+  if (e.key === 'ArrowLeft') state.nudgeYaw = 0.5;
+  if (e.key === 'ArrowRight') state.nudgeYaw = -0.5;
+  if (e.key === 'c' || e.key === 'C') nextView();
 });
 
 // ---------------------------------------------------------------------------
 // Camera: World of Warcraft's third person. It hangs rigidly at a yaw, pitch
-// and distance from the bird, so the bird is the pivot of every orbit and holds
-// its place on screen. There is no director; only the viewer moves it, and it
-// stays where it is put.
+// and distance from the bike, so the bike is the pivot of every orbit and holds
+// its place on screen. There is no director; only the viewer moves it, by a
+// drag, the wheel, or the camera control's few framings, and it stays where
+// it is put.
 // ---------------------------------------------------------------------------
-function obstacleFloor(x, z) {
-  let floor = Math.max(SEA_LEVEL, heightAt(x, z));
-  for (const records of [treeRecords, ruinRecords, propRecords])
-    for (const tree of records)
-      if ((tree.x - x) ** 2 + (tree.z - z) ** 2 < (tree.radius + 5) ** 2) floor = Math.max(floor, tree.top);
-  return floor;
-}
 const CAMERA = {
-  dist: 17,
-  pitch: 0.3, // elevation above the bird, radians
-  minDist: 9,
-  maxDist: 40,
-  minPitch: -0.5,
-  maxPitch: 1.2,
+  dist: 6.5,
+  pitch: 0.2, // elevation above the bike, radians
+  minDist: 3,
+  maxDist: 70,
+  minPitch: -0.12,
+  maxPitch: 1.3,
   turnPerPixel: 0.004,
-  lookRise: 0.9, // aim just above the bird, so it sits a little below center
-  clearance: 9,
+  lookRise: 1.0, // aim at the rider's shoulders, so the bike sits a little below center
+  clearance: 0.8,
 };
+// The camera control's framings: behind, beside, ahead looking back, the
+// drone overhead, and far off across the country.
+const VIEWS = [
+  { id: 'chase', yaw: 0, pitch: 0.2, dist: 6.5 },
+  { id: 'side', yaw: 1.3, pitch: 0.1, dist: 6 },
+  { id: 'ahead', yaw: 2.8, pitch: 0.12, dist: 8 },
+  { id: 'drone', yaw: 0.3, pitch: 0.8, dist: 32 },
+  { id: 'far', yaw: -1.0, pitch: 0.3, dist: 62 },
+];
 const cam = {
-  yaw: 0, // orbit around the bird, relative to its heading; 0 is behind
+  yaw: 0, // orbit around the bike, relative to its heading; 0 is behind
   pitch: CAMERA.pitch,
   dist: CAMERA.dist,
-  lift: 0, // extra height that keeps the camera out of ground and canopies
+  lift: 0, // extra height that keeps the camera out of the ground, canopies and roofs
+  view: 0, // the framing last chosen, -1 once a drag has moved it
 };
 {
   // the viewer's framing is theirs across visits and worlds
@@ -3069,79 +2674,77 @@ const cam = {
   cam.yaw = finite(orbit.yaw, -Math.PI, Math.PI) ?? cam.yaw;
   cam.pitch = finite(orbit.pitch, CAMERA.minPitch, CAMERA.maxPitch) ?? cam.pitch;
   cam.dist = finite(orbit.dist, CAMERA.minDist, CAMERA.maxDist) ?? cam.dist;
+  cam.view = Number.isInteger(orbit.view) ? (finite(orbit.view, -1, VIEWS.length - 1) ?? 0) : 0;
+}
+function obstacleFloor(x, z) {
+  let floor = Math.max(SEA_LEVEL, heightAt(x, z));
+  for (const records of [treeRecords, siteRecords, propRecords])
+    for (const o of records) if ((o.x - x) ** 2 + (o.z - z) ** 2 < (o.radius + CAMERA.clearance) ** 2) floor = Math.max(floor, o.top);
+  return floor;
 }
 function updateCamera(dt) {
   const yaw = state.heading + Math.PI + cam.yaw,
-    cp = Math.cos(cam.pitch);
+    cp = Math.cos(cam.pitch),
+    pivotY = state.y + CAMERA.lookRise;
   const want = _v3.set(
     state.x + Math.sin(yaw) * cp * cam.dist,
-    state.y + Math.sin(cam.pitch) * cam.dist,
+    pivotY + Math.sin(cam.pitch) * cam.dist,
     state.z + Math.cos(yaw) * cp * cam.dist,
   );
-  // Ground and canopies lift the camera quickly and let it settle back slowly.
+  // Ground, canopies and roofs lift the camera quickly and let it settle back slowly.
   const floor = obstacleFloor(want.x, want.z);
   const lift = Math.max(0, floor + CAMERA.clearance - want.y);
-  cam.lift += (lift - cam.lift) * Math.min(1, dt * (lift > cam.lift ? 10 : 1.5));
-  want.y = Math.max(want.y + cam.lift, floor + 7);
+  cam.lift += (lift - cam.lift) * Math.min(1, dt * (lift > cam.lift ? 12 : 1.5));
+  want.y = Math.max(want.y + cam.lift, floor + 0.5);
   camera.position.copy(want);
-  // A kind may move where the camera looks, so a long neck sits in frame; the
-  // camera's place, and so the orbit's pivot, stays on the bird.
-  const look = bird.userData.kind.look,
-    ahead = (look?.ahead ?? 0) * bird.scale.y;
-  camera.lookAt(
-    state.x + Math.sin(state.heading) * ahead,
-    state.y + (look?.rise ?? CAMERA.lookRise),
-    state.z + Math.cos(state.heading) * ahead,
-  );
+  camera.lookAt(state.x, pivotY, state.z);
 }
 
 // ---------------------------------------------------------------------------
-// Moments: rare, scheduled, with cooldowns. For now: a flock that joins and
-// leaves. Cloud crossings come from the altitude schedule.
+// Moments: rare, scheduled, with cooldowns. For now: the egrets.
 // ---------------------------------------------------------------------------
-const moments = { nextFlock: 75, flockStarted: 0, flockUntil: 0, flockOn: false };
+const moments = { nextFlock: 90, flockStarted: 0, flockUntil: 0, flockOn: false, side: 1 };
 function updateMoments(dt, sound = true) {
-  if (!moments.flockOn && state.t > moments.nextFlock) {
+  if (!moments.flockOn && state.t > moments.nextFlock && !isNight(dayPhase)) {
     moments.flockOn = true;
     moments.flockStarted = state.t;
-    moments.flockUntil = state.t + 70 + Math.random() * 30;
+    moments.flockUntil = state.t + 35 + Math.random() * 20;
+    moments.side = Math.random() < 0.5 ? -1 : 1;
     if (sound) audio.chime(2);
   }
   if (moments.flockOn && state.t > moments.flockUntil) {
     moments.flockOn = false;
-    moments.nextFlock = state.t + 95 + Math.random() * 50;
+    moments.nextFlock = state.t + 140 + Math.random() * 90;
   }
   const fx = Math.sin(state.heading),
     fz = Math.cos(state.heading),
-    rx = Math.cos(state.heading),
-    rz = -Math.sin(state.heading);
+    rx = -Math.cos(state.heading),
+    rz = Math.sin(state.heading);
   companions.forEach((b, i) => {
     const f = formation[i];
-    // ease in from far behind and below; ease out the same way
-    const tIn = Math.min(1, Math.max(0, (state.t - moments.flockStarted) / 14));
-    const tOut = moments.flockOn ? 1 : Math.max(0, 1 - (state.t - moments.flockUntil) / 14);
+    // they come in from ahead and to one side, keep pace a while, then rise away
+    const tIn = Math.min(1, Math.max(0, (state.t - moments.flockStarted) / 10));
+    const tOut = moments.flockOn ? 1 : Math.max(0, 1 - (state.t - moments.flockUntil) / 12);
     const a = moments.flockStarted > 0 ? Math.min(tIn, tOut) : 0;
     b.visible = a > 0.01;
     if (!b.visible) return;
     const ease = 1 - Math.pow(1 - a, 3);
-    const back = (1 - ease) * 140;
-    const flock = bird.userData.kind.flock,
-      spread = flock.spread ?? 1;
-    const wob = n1(state.t * 0.3 + i * 7.7, S3 + i) * 3 * (flock.wobble ?? 1);
-    b.position.set(
-      state.x + rx * f[0] * spread + fx * (f[2] * spread - back),
-      state.y + f[1] - (1 - ease) * 40 + wob,
-      state.z + rz * f[0] * spread + fz * (f[2] * spread - back),
-    );
-    b.position.y = Math.max(b.position.y, obstacleFloor(b.position.x, b.position.z) + 6);
-    b.rotation.set(-state.pitch * 0.8, state.heading, state.bank * 0.9);
-    animateWings(b, dt, state.flapping || (i % 2 === 0 && state.flapBurst > 0), 0.9 + i * 0.05);
+    const spread = flockKind.flock.spread ?? 1;
+    const off = moments.side * (22 + f[0] * spread) + (1 - ease) * moments.side * 60;
+    const ahead = 14 + f[2] * spread + (1 - ease) * 90;
+    const wob = n1(state.t * 0.3 + i * 7.7, S3 + i) * 1.5;
+    const px = state.x + rx * off + fx * ahead,
+      pz = state.z + rz * off + fz * ahead;
+    b.position.set(px, Math.max(heightAt(px, pz), SEA_LEVEL) + 14 + f[1] + wob + (1 - ease) * 30, pz);
+    b.rotation.set(0, state.heading, -state.lean * 0.4);
+    animateBird(b, dt, i % 2 === 0 || Math.sin(state.t * 0.7 + i) > 0.2, 0.9 + i * 0.05);
   });
 }
 
 // ---------------------------------------------------------------------------
-// Sound: everything synthesized. Wind that follows altitude and speed, water
-// near the ocean, a pentatonic chime now and then, a soft brush per wing beat.
+// Sound: everything synthesized. A twin's low engine note that follows the
+// road speed through the gears and opens up on a climb, wind that rises with
+// speed, the sea near the coast, and a pentatonic chime now and then.
 // ---------------------------------------------------------------------------
 const audio = (() => {
   let ctx = null,
@@ -3149,14 +2752,16 @@ const audio = (() => {
     windFilter = null,
     windGain = null,
     waterGain = null,
+    engine = null,
     noise = null,
     delay = null,
     muted = storedSettings.muted === true,
     volume = finite(storedSettings.volume, 0, 1) ?? 0.5,
     started = false;
-  let lastFlapPhase = 0,
-    chimeTimer = 25;
+  let chimeTimer = 30;
   const PENTA = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99];
+  // where each gear runs out, in m/s; the note climbs through each and drops at the shift
+  const GEARS = [0, 5, 9.5, 14, 18.5, 26];
   function pinkBuffer(seconds) {
     const sr = ctx.sampleRate,
       n = Math.floor(sr * seconds),
@@ -3182,21 +2787,19 @@ const audio = (() => {
     }
     return buf;
   }
+  function unavailable() {
+    document.getElementById('muteBtn').textContent = 'sound unavailable';
+    document.getElementById('muteBtn').disabled = true;
+  }
   function start() {
     if (started) return;
     started = true;
     const Audio = window.AudioContext || window.webkitAudioContext;
-    if (!Audio) {
-      document.getElementById('muteBtn').textContent = 'sound unavailable';
-      document.getElementById('muteBtn').disabled = true;
-      return;
-    }
+    if (!Audio) return unavailable();
     try {
       ctx = new Audio();
     } catch {
-      document.getElementById('muteBtn').textContent = 'sound unavailable';
-      document.getElementById('muteBtn').disabled = true;
-      return;
+      return unavailable();
     }
     ctx.resume().catch(() => {});
     master = ctx.createGain();
@@ -3212,7 +2815,7 @@ const audio = (() => {
     windFilter.frequency.value = 500;
     windFilter.Q.value = 0.6;
     windGain = ctx.createGain();
-    windGain.gain.value = 0.22;
+    windGain.gain.value = 0.1;
     src.connect(windFilter).connect(windGain).connect(master);
     src.start();
     const src2 = ctx.createBufferSource();
@@ -3227,6 +2830,37 @@ const audio = (() => {
     waterGain.gain.value = 0;
     src2.connect(wf).connect(waterGain).connect(master);
     src2.start();
+    // The engine: a sawtooth at the firing rate over a square an octave down,
+    // softly clipped, its loudness pulsing with the firing, through a low-pass
+    // that opens with the throttle. Quiet: it sits under the wind.
+    const fire = ctx.createOscillator(),
+      low = ctx.createOscillator(),
+      pulse = ctx.createOscillator();
+    fire.type = 'sawtooth';
+    low.type = 'square';
+    pulse.type = 'sine';
+    const lowGain = ctx.createGain();
+    lowGain.gain.value = 0.45;
+    const shaper = ctx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) curve[i] = Math.tanh(((i / 255) * 2 - 1) * 1.8);
+    shaper.curve = curve;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 2.2;
+    filter.frequency.value = 400;
+    const amp = ctx.createGain();
+    amp.gain.value = 0.7;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.3;
+    pulse.connect(depth).connect(amp.gain);
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    fire.connect(shaper);
+    low.connect(lowGain).connect(shaper);
+    shaper.connect(filter).connect(amp).connect(gain).connect(master);
+    for (const o of [fire, low, pulse]) o.start();
+    engine = { fire, low, pulse, filter, gain };
     delay = ctx.createDelay(1.0);
     delay.delayTime.value = 0.42;
     const fb = ctx.createGain();
@@ -3244,7 +2878,7 @@ const audio = (() => {
       const f = PENTA[Math.floor(Math.random() * PENTA.length)] * (Math.random() < 0.3 ? 2 : 1);
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.12, t + 0.012);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5);
       const o = ctx.createOscillator();
       o.type = 'sine';
@@ -3270,56 +2904,40 @@ const audio = (() => {
       };
     }
   }
-  function flap() {
-    if (!ctx) return;
-    const t = ctx.currentTime;
-    const src = ctx.createBufferSource();
-    src.buffer = noise;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 260;
-    bp.Q.value = 1.1;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.11, t + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);
-    src.connect(bp).connect(g).connect(master);
-    src.start(t, Math.random() * 3);
-    src.stop(t + 0.25);
-    src.onended = () => {
-      src.disconnect();
-      bp.disconnect();
-      g.disconnect();
-    };
+  // the engine's revolutions per minute at a road speed, through the gears
+  function rpm(v) {
+    let g = 1;
+    while (g < GEARS.length - 1 && v > GEARS[g]) g++;
+    const lo = GEARS[g - 1],
+      hi = GEARS[g];
+    return 1900 + 3400 * Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
   }
   function update(dt) {
     if (!ctx) return;
-    const alt = Math.max(0, state.y - heightAt(state.x, state.z));
+    const now = ctx.currentTime,
+      v = state.speed;
     const gust = 0.5 + 0.5 * Math.sin(state.t * 0.43) * Math.sin(state.t * 0.071 + 1.3);
-    const f = 380 + Math.min(1, alt / 700) * 700 + gust * 260 + Math.abs(state.vy) * 18;
-    windFilter.frequency.setTargetAtTime(f, ctx.currentTime, 0.4);
-    windGain.gain.setTargetAtTime(
-      0.16 + 0.1 * gust + 0.05 * Math.min(1, Math.abs(state.vy) / 10),
-      ctx.currentTime,
-      0.5,
-    );
-    // ocean-ness: how much of the ground around the bird is under water
+    windFilter.frequency.setTargetAtTime(300 + v * 32 + gust * 220, now, 0.4);
+    windGain.gain.setTargetAtTime(0.04 + 0.13 * (v / RIDE.cruise) ** 2 + 0.05 * gust, now, 0.5);
+    // the engine works harder up a grade and eases off down one
+    const climb = Math.max(-0.5, Math.min(1, state.pitch * 8));
+    const f = rpm(v) / 60;
+    engine.fire.frequency.setTargetAtTime(f, now, 0.12);
+    engine.low.frequency.setTargetAtTime(f / 2, now, 0.12);
+    engine.pulse.frequency.setTargetAtTime(f / 2, now, 0.12);
+    engine.filter.frequency.setTargetAtTime(260 + f * 4 + 380 * Math.max(0, climb), now, 0.2);
+    engine.gain.gain.setTargetAtTime(0.05 + 0.025 * Math.max(0, climb) + 0.01 * Math.min(1, v / 5), now, 0.3);
+    // sea-ness: how much of the ground around the bike is under water
     let under = 0;
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * 6.283;
-      if (heightAt(state.x + Math.cos(a) * 320, state.z + Math.sin(a) * 320) < 0) under++;
+      if (heightAt(state.x + Math.cos(a) * 260, state.z + Math.sin(a) * 260) < 0) under++;
     }
-    const near = heightAt(state.x, state.z) < 0 ? 1 : 0;
-    const water = Math.min(1, (under / 8) * 0.8 + near * 0.4) * Math.max(0, 1 - alt / 500);
-    waterGain.gain.setTargetAtTime(water * 0.28, ctx.currentTime, 1.2);
-    // wing beats
-    const ph = bird.userData.phase % 6.283;
-    if (state.flapping && ph < lastFlapPhase) flap();
-    lastFlapPhase = ph;
+    waterGain.gain.setTargetAtTime((under / 8) * 0.3, now, 1.2);
     chimeTimer -= dt;
     if (chimeTimer <= 0) {
       chime(1 + (Math.random() < 0.3 ? 1 : 0));
-      chimeTimer = 22 + Math.random() * 40;
+      chimeTimer = 40 + Math.random() * 50;
     }
   }
   function applyGain(seconds) {
@@ -3351,12 +2969,12 @@ const audio = (() => {
   return {
     start,
     chime,
-    flap,
     update,
     toggleMute,
     setVolume,
     suspend,
     dispose,
+    rpm,
     get state() {
       return ctx?.state ?? 'not-created';
     },
@@ -3375,95 +2993,77 @@ function saveSettings() {
   remember.write(SETTINGS_KEY, {
     volume: audio.volume,
     muted: audio.muted,
-    camera: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist },
-    bird: birdKindId,
-    plumage: plumageId,
+    camera: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist, view: cam.view },
+    paint: paintId,
   });
 }
 // ---------------------------------------------------------------------------
-// The perch: the corner control opens two strips, the kinds' shapes over the
-// colors of the kind now flying - its own colors first, then every plumage. A
-// pick in either strip swaps the bird and its flock at once and is remembered;
-// picking a kind keeps the plumage and refreshes the lower strip. An ordinary
-// vertical wheel scrolls a strip sideways, with no modifier key. The perch
-// closes by itself, on Escape, or on a click anywhere else. Inert until Begin.
+// The corner: a paint control opens one strip of the bike in every paint, and
+// a camera control steps through the framings. A pick repaints the bike at
+// once and is remembered. An ordinary vertical wheel scrolls the strip
+// sideways. The strip closes by itself, on Escape, or on a click anywhere
+// else. Both are inert until Begin.
 // ---------------------------------------------------------------------------
-const birdButton = document.getElementById('birdBtn'),
+const paintButton = document.getElementById('paintBtn'),
+  viewButton = document.getElementById('viewBtn'),
   perch = document.getElementById('perch'),
-  kindStrip = document.getElementById('perchKinds'),
-  plumageStrip = document.getElementById('perchPlumages'),
+  paintStrip = document.getElementById('perchPaints'),
   hudLine = document.getElementById('hud');
-const kindTiles = new Map(),
-  tiles = new Map();
-let shownKindId = null;
-const makeTile = (label, className = 'tile') => {
-  const tile = document.createElement('button');
-  tile.type = 'button';
-  tile.className = className;
-  tile.title = label;
-  tile.setAttribute('aria-label', label);
-  return tile;
-};
-// The strips are built the first time the perch opens: a few dozen inline
-// tiles are not worth paying for on a visit that never looks.
+const tiles = new Map();
+// The strip is built the first time it opens: inline tiles are not worth
+// paying for on a visit that never looks.
 function buildPerch() {
-  if (kindTiles.size) return;
-  for (const kind of BIRDS) {
-    const tile = makeTile(`Fly as ${/^[aeiou]/i.test(kind.name) ? 'an' : 'a'} ${kind.name}`);
-    tile.dataset.kind = kind.id;
-    tile.innerHTML = plumageTile(catalog.variantOf(kind, null)) + `<span class="name">${kind.name}</span>`;
+  if (tiles.size) return;
+  for (const paint of PAINTS) {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'tile';
+    tile.title = paint.name;
+    tile.setAttribute('aria-label', `Ride in ${paint.name}`);
+    tile.dataset.paint = paint.id;
+    tile.innerHTML = bikeTile(paint) + `<span class="name">${paint.name}</span>`;
     tile.addEventListener('click', () => {
-      setBirdKind(kind.id, plumageId);
+      setPaint(paint.id);
       armPerchIdle();
     });
-    kindStrip.append(tile);
-    kindTiles.set(kind.id, tile);
+    paintStrip.append(tile);
+    tiles.set(paint.id, tile);
   }
-  showBird();
+  showPaint();
 }
-// The lower strip is the one kind's colors, rebuilt whenever the kind changes.
-function buildPlumages(kind) {
-  shownKindId = kind.id;
-  tiles.clear();
-  plumageStrip.replaceChildren();
-  for (const v of catalog.variants) {
-    if (v.base !== kind) continue;
-    const tile = makeTile(v.plumage ? `${v.name}, ${v.marking.id}` : `${v.name}, its own colors`, 'tile' + (v.plumage ? '' : ' own'));
-    tile.dataset.variant = v.id;
-    tile.innerHTML = plumageTile(v);
-    tile.addEventListener('click', () => {
-      setBirdKind(v.base.id, v.plumage?.id ?? null);
-      armPerchIdle();
-    });
-    plumageStrip.append(tile);
-    tiles.set(v.id, tile);
-  }
-}
-function showBird() {
-  birdButton.textContent = 'bird: ' + BIRD[birdKindId].name;
-  if (!kindTiles.size) return;
-  for (const [id, tile] of kindTiles) tile.setAttribute('aria-pressed', String(id === birdKindId));
-  if (shownKindId !== birdKindId) buildPlumages(BIRD[birdKindId]);
-  const current = bird.userData.variant.id;
-  for (const [id, tile] of tiles) tile.setAttribute('aria-pressed', String(id === current));
+function showPaint() {
+  paintButton.textContent = 'paint: ' + PAINT[paintId].name.toLowerCase();
+  for (const [id, tile] of tiles) tile.setAttribute('aria-pressed', String(id === paintId));
   markOverflow();
 }
-showBird();
-// What is out of sight on a strip is told twice: the edge it can still be
-// scrolled toward fades, and its rail shows how much is in view and where.
-// A strip that fits fades neither edge and has no rail.
-function markOverflow() {
-  for (const strip of [kindStrip, plumageStrip]) {
-    const max = strip.scrollWidth - strip.clientWidth,
-      rail = strip.nextElementSibling;
-    strip.dataset.overflow = max < 1 ? '' : [strip.scrollLeft > 1 ? 'start' : '', strip.scrollLeft < max - 1 ? 'end' : ''].filter(Boolean).join(' ');
-    rail.classList.toggle('on', max >= 1);
-    rail.firstElementChild.style.width = `${((100 * strip.clientWidth) / strip.scrollWidth).toFixed(2)}%`;
-    rail.firstElementChild.style.marginLeft = `${((100 * strip.scrollLeft) / strip.scrollWidth).toFixed(2)}%`;
+showPaint();
+function showView(index) {
+  cam.view = index;
+  viewButton.textContent = 'camera: ' + (index < 0 ? 'free' : VIEWS[index].id);
+}
+showView(cam.view);
+function nextView() {
+  const view = VIEWS[(cam.view + 1) % VIEWS.length];
+  Object.assign(cam, { yaw: view.yaw, pitch: view.pitch, dist: view.dist });
+  showView(VIEWS.indexOf(view));
+  saveSettings();
+  if (!running || paused) {
+    last = performance.now();
+    renderer.setAnimationLoop(frame);
   }
 }
-// A vertical wheel or trackpad swipe moves an overflowing strip sideways, so
-// the colors need no shift key; a native horizontal swipe is left to scroll.
+viewButton.addEventListener('click', nextView);
+// What is out of sight on the strip is told twice: the edge it can still be
+// scrolled toward fades, and its rail shows how much is in view and where.
+function markOverflow() {
+  const strip = paintStrip,
+    max = strip.scrollWidth - strip.clientWidth,
+    rail = strip.nextElementSibling;
+  strip.dataset.overflow = max < 1 ? '' : [strip.scrollLeft > 1 ? 'start' : '', strip.scrollLeft < max - 1 ? 'end' : ''].filter(Boolean).join(' ');
+  rail.classList.toggle('on', max >= 1);
+  rail.firstElementChild.style.width = `${((100 * strip.clientWidth) / Math.max(1, strip.scrollWidth)).toFixed(2)}%`;
+  rail.firstElementChild.style.marginLeft = `${((100 * strip.scrollLeft) / Math.max(1, strip.scrollWidth)).toFixed(2)}%`;
+}
 const WHEEL_LINE = 16;
 function wheelStrip(e) {
   const strip = e.currentTarget,
@@ -3474,17 +3074,15 @@ function wheelStrip(e) {
   strip.scrollLeft = Math.max(0, Math.min(max, before + step));
   if (strip.scrollLeft !== before) e.preventDefault();
 }
-for (const strip of [kindStrip, plumageStrip]) {
-  strip.addEventListener('wheel', wheelStrip, { passive: false });
-  strip.addEventListener('scroll', markOverflow, { passive: true });
-}
+paintStrip.addEventListener('wheel', wheelStrip, { passive: false });
+paintStrip.addEventListener('scroll', markOverflow, { passive: true });
 let perchIdle = 0;
 const PERCH_IDLE_MS = 7000;
 function armPerchIdle() {
   clearTimeout(perchIdle);
   perchIdle = setTimeout(closePerch, PERCH_IDLE_MS);
 }
-// The perch sits just above the controls line, however many lines that wraps to.
+// The strip sits just above the controls line, however many lines that wraps to.
 function placePerch() {
   perch.style.bottom = `${Math.round(window.innerHeight - hudLine.getBoundingClientRect().top + 8)}px`;
 }
@@ -3494,10 +3092,9 @@ function openPerch() {
   placePerch();
   perch.inert = false;
   perch.classList.add('open');
-  birdButton.setAttribute('aria-expanded', 'true');
-  showBird();
-  kindTiles.get(birdKindId)?.scrollIntoView({ block: 'nearest', inline: 'center' });
-  tiles.get(bird.userData.variant.id)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  paintButton.setAttribute('aria-expanded', 'true');
+  showPaint();
+  tiles.get(paintId)?.scrollIntoView({ block: 'nearest', inline: 'center' });
   markOverflow();
   armPerchIdle();
 }
@@ -3506,12 +3103,12 @@ function closePerch() {
   if (!perch.classList.contains('open')) return;
   perch.classList.remove('open');
   perch.inert = true;
-  birdButton.setAttribute('aria-expanded', 'false');
+  paintButton.setAttribute('aria-expanded', 'false');
 }
-birdButton.addEventListener('click', () => (perch.classList.contains('open') ? closePerch() : openPerch()));
+paintButton.addEventListener('click', () => (perch.classList.contains('open') ? closePerch() : openPerch()));
 for (const type of ['pointermove', 'pointerdown', 'focusin', 'wheel']) perch.addEventListener(type, armPerchIdle, { passive: true });
 document.addEventListener('pointerdown', (e) => {
-  if (!perch.contains(e.target) && !birdButton.contains(e.target)) closePerch();
+  if (!perch.contains(e.target) && !paintButton.contains(e.target)) closePerch();
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePerch();
@@ -3533,7 +3130,8 @@ volumeSlider.addEventListener('input', () => showMuted(audio.setVolume(volumeSli
 // Four samples here and nowhere else; see the renderer above.
 const scenePass = pass(scene, camera, { samples: 4 });
 const col = scenePass.getTextureNode();
-const glow = bloom(col, LOOK.bloom.strength, LOOK.bloom.radius, LOOK.bloom.threshold);
+// The phone budget skips the bloom and the soft reconstruction; FXAA stays.
+const glow = LITE ? null : bloom(col, LOOK.bloom.strength, LOOK.bloom.radius, LOOK.bloom.threshold);
 const post = new RenderPipeline(renderer);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = LOOK.exposure;
@@ -3545,10 +3143,17 @@ post.outputColorTransform = false;
 // reads is the cheapest bandwidth this page can give back. Neither needs a
 // depth buffer either; each is one full-screen quad.
 const LDR = { type: THREE.UnsignedByteType, depthBuffer: false };
-const display = convertToTexture(renderOutput(vec4(col.rgb.add(glow.rgb), 1)), null, null, LDR);
+const display = convertToTexture(renderOutput(vec4(glow ? col.rgb.add(glow.rgb) : col.rgb, 1)), null, null, LDR);
 const softened = Fn(() => {
   const center = display.sample(screenUV),
-    sum = center.rgb.mul(4).toVar(),
+    graded = (rgb) => {
+      rgb = rgb.mul(LOOK.post.mul).add(vec3(LOOK.post.lift[0], LOOK.post.lift[1], LOOK.post.lift[2])).toVar();
+      rgb.assign(saturation(rgb, float(LOOK.post.sat)));
+      rgb.assign(mix(vec3(0.5), rgb, float(LOOK.post.contrast)));
+      return rgb;
+    };
+  if (LITE) return vec4(graded(center.rgb), center.a);
+  const sum = center.rgb.mul(4).toVar(),
     weights = float(4).toVar();
   for (const [x, y, spatial] of [
     [-1, 0, 2],
@@ -3566,13 +3171,7 @@ const softened = Fn(() => {
     sum.addAssign(neighbor.mul(weight));
     weights.addAssign(weight);
   }
-  const rgb = mix(center.rgb, sum.div(weights), 0.65)
-    .mul(LOOK.post.mul)
-    .add(vec3(LOOK.post.lift[0], LOOK.post.lift[1], LOOK.post.lift[2]))
-    .toVar();
-  rgb.assign(saturation(rgb, float(LOOK.post.sat)));
-  rgb.assign(mix(vec3(0.5), rgb, float(LOOK.post.contrast)));
-  return vec4(rgb, center.a);
+  return vec4(graded(mix(center.rgb, sum.div(weights), 0.65)), center.a);
 })();
 const softDisplay = convertToTexture(softened, null, null, LDR);
 post.outputNode = fxaa(softDisplay);
@@ -3586,7 +3185,7 @@ const _sunDir = new THREE.Vector3(),
   _moonDir = new THREE.Vector3();
 const BASE_EXPOSURE = LOOK.exposure;
 // Where the sun and the moon stand at a moment of the day clock. The moon
-// rides its own arc, up before dusk and gone before dawn. The flight reads
+// rides its own arc, up before dusk and gone before dawn. The ride reads
 // these too.
 function skyBodies(phase, sunOut, moonOut) {
   const elev = (solar(phase) - 0.25) * Math.PI * 2;
@@ -3641,7 +3240,7 @@ function updateAtmosphere(dt) {
     sun.intensity = L.moon.intensity * moonLight;
     sun.shadow.intensity = 0.4 * LOOK.shadowI;
   }
-  // The shadow frame follows the bird, but only in whole shadow-map texels
+  // The shadow frame follows the bike, but only in whole shadow-map texels
   // across the light's plane, so the shadows drawn on the ground never crawl
   // as the frame slides under them.
   _m4.lookAt(sun.position, _zero, sun.up);
@@ -3649,10 +3248,10 @@ function updateAtmosphere(dt) {
     e = _m4.elements;
   _v3.set(e[0], e[1], e[2]);
   _s3.set(e[4], e[5], e[6]);
-  const along = bird.position.dot(_v3),
-    up = bird.position.dot(_s3);
+  const along = bike.position.dot(_v3),
+    up = bike.position.dot(_s3);
   sun.target.position
-    .copy(bird.position)
+    .copy(bike.position)
     .addScaledVector(_v3, Math.round(along / texel) * texel - along)
     .addScaledVector(_s3, Math.round(up / texel) * texel - up);
   sun.position.multiplyScalar(1000).add(sun.target.position);
@@ -3672,102 +3271,87 @@ function updateAtmosphere(dt) {
   // No star vertices submitted in daylight or inside the opaque deck.
   galaxy.stars.visible = night > 0 && uWhiteout.value < 0.995;
   sky.position.copy(camera.position);
+  // the headlight comes on with the dusk
+  uLamp.value.set(state.x, state.z, state.heading, sstep(0.02, -0.12, sy));
 }
 
 // ---------------------------------------------------------------------------
-// Resume. A remembered flight in this world continues from its exact moment:
-// place, course, time of day and the schedules that hang off the clock.
+// Resume. A remembered ride in this world continues from its exact moment:
+// place, course, speed, time of day and the schedules that hang off the clock.
 // ---------------------------------------------------------------------------
-function restoreFlight(stored) {
+function restoreRide(stored) {
   if (!stored || stored.seed !== seed) return false;
   const n = (key, min, max) => finite(stored[key], min, max);
   const x = n('x'),
     z = n('z'),
-    y = n('y', -200, 6000),
     heading = n('heading'),
     t = n('t', 0),
     phase = n('dayPhase', 0, 1);
-  if ([x, z, y, heading, t, phase].some((v) => v === null)) return false;
+  if ([x, z, heading, t, phase].some((v) => v === null)) return false;
   Object.assign(state, {
     x,
-    y,
     z,
     t,
     heading: wrapAngle(heading),
-    vy: n('vy', -40, 40) ?? 0,
-    bank: n('bank', -1, 1) ?? 0,
-    pitch: n('pitch', -1, 1) ?? 0,
-    yawRate: n('yawRate', -1, 1) ?? 0,
+    speed: n('speed', 0, 40) ?? RIDE.cruise,
+    yawRate: n('yawRate', -2, 2) ?? 0,
+    lean: n('lean', -1, 1) ?? 0,
+    dir: stored.dir === -1 ? -1 : 1,
+    odometer: n('odometer', 0) ?? 0,
   });
   dayPhase = phase % 1;
-  cloudSchedule = n('cloudSchedule', 0, 1) ?? 0;
-  cloudOrigin = n('cloudOrigin') ?? -150;
-  const low = stored.low ?? {},
-    flock = stored.flock ?? {};
-  Object.assign(flight, {
-    lowNext: finite(low.next, 0) ?? t + 160,
-    lowUntil: finite(low.until, 0) ?? 0,
-    low: low.on === true,
-    lowAmount: finite(low.amount, 0, 1) ?? 0,
-  });
+  const flock = stored.flock ?? {};
   Object.assign(moments, {
-    nextFlock: finite(flock.next, 0) ?? t + 75,
+    nextFlock: finite(flock.next, 0) ?? t + 90,
     flockStarted: finite(flock.started, 0) ?? 0,
     flockUntil: finite(flock.until, 0) ?? 0,
     flockOn: flock.on === true,
   });
-  skyBodies(dayPhase, _sunDir, _moonDir);
-  updateSunward();
-  sunward.released = stored.released === true;
   return true;
 }
-function flightMemory() {
+function rideMemory() {
   return {
     seed,
     x: state.x,
-    y: state.y,
     z: state.z,
     t: state.t,
     heading: state.heading,
-    vy: state.vy,
-    bank: state.bank,
-    pitch: state.pitch,
+    speed: state.speed,
     yawRate: state.yawRate,
+    lean: state.lean,
+    dir: state.dir,
+    odometer: state.odometer,
     dayPhase,
-    cloudSchedule,
-    cloudOrigin,
-    low: { next: flight.lowNext, until: flight.lowUntil, on: flight.low, amount: flight.lowAmount },
     flock: {
       next: moments.nextFlock,
       started: moments.flockStarted,
       until: moments.flockUntil,
       on: moments.flockOn,
     },
-    released: sunward.released,
   };
 }
-// Written a couple of times a minute while flying and whenever the flight
-// stops, hides or leaves; never before Begin, when nothing has changed.
+// Written every couple of seconds while riding and whenever the ride stops,
+// hides or leaves; never before Begin, when nothing has changed.
 let begun = false,
   lastSave = -Infinity;
-function saveFlight() {
+function saveRide() {
   if (!begun || disposed) return;
   lastSave = performance.now();
-  remember.write(RESUME_KEY, flightMemory());
+  remember.write(RESUME_KEY, rideMemory());
 }
 
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
-const resumed = restoreFlight(storedFlight);
-if (!resumed) {
-  intro.beat = 'side';
-  skyBodies(dayPhase, _sunDir, _moonDir);
-}
+const resumed = restoreRide(storedRide);
+if (!resumed) intro.beat = 'dawn';
+skyBodies(dayPhase, _sunDir, _moonDir);
 fillAll(Math.round(state.x / CELL), Math.round(state.z / CELL));
-if (!resumed) state.y = Math.max(state.y, heightAt(state.x, state.z) + 120);
+state.y = heightAt(state.x, state.z);
 placeTrees(state.x, state.z);
-if (resumed) state.y = Math.max(state.y, obstacleFloor(state.x, state.z) + 8);
+// stand the bike on its wheels for the still behind Begin
+updateRide(1e-4);
+state.t = resumed ? state.t - 1e-4 : 0;
 let last = performance.now();
 let running = false,
   paused = false,
@@ -3796,14 +3380,13 @@ const trace = {
 const push = (list, value) => {
   if (list.length < TRACE_MAX) list.push(value);
 };
-// One executable simulation path, also used by sustained-flight regression checks.
+// One executable simulation path, also used by sustained-ride regression checks.
 function advance(dt, sound = true) {
   if (disposed || !Number.isFinite(dt) || dt <= 0 || dt > 0.05) return;
-  updateFlight(dt);
+  updateRide(dt);
   updateTitle();
   time.value = state.t;
   updateHeightfield(state.x, state.z);
-  updatePlumes(state.t);
   uOrigin.value.set(Math.round(state.x / CELL) * CELL, Math.round(state.z / CELL) * CELL);
   terrain.position.set(uOrigin.value.x, 0, uOrigin.value.y);
   uWaterOrigin.value.set(
@@ -3818,7 +3401,7 @@ function advance(dt, sound = true) {
   updateCamera(dt);
   placeGrass(camera.position.x, camera.position.z);
   updateAtmosphere(dt);
-  if (performance.now() - lastSave > 2000) saveFlight();
+  if (performance.now() - lastSave > 2000) saveRide();
 }
 // A small linear picture of the scene as it stands, for checks that must see
 // what is drawn (the sun over the clouds, the light on their tops) rather than
@@ -3872,9 +3455,6 @@ function frame(now) {
     water.position.set(uWaterOrigin.value.x, 0, uWaterOrigin.value.y);
     cloudSea.position.set(state.x, DECK_Y - 55, state.z);
     updateClouds(state.x, state.z, 0);
-    bird.position.set(state.x, state.y, state.z);
-    bird.rotation.set(0, state.heading, 0);
-    animateWings(bird, dt, false);
     updateCamera(dt);
     placeGrass(camera.position.x, camera.position.z);
     updateAtmosphere(0);
@@ -3945,6 +3525,7 @@ window.addEventListener('resize', () => {
     markOverflow();
   }
   camera.aspect = window.innerWidth / window.innerHeight;
+  fitFov();
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(renderScale());
   renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -3958,7 +3539,7 @@ window.addEventListener('resize', () => {
 function syncPlayback() {
   if (disposed) return;
   endDrag();
-  saveFlight();
+  saveRide();
   last = performance.now();
   audio.suspend(document.hidden || paused || !running);
   renderer.setAnimationLoop(!disposed && !document.hidden && running && !paused ? frame : null);
@@ -3968,7 +3549,7 @@ function togglePause() {
   paused = !paused;
   const button = document.getElementById('pauseBtn');
   button.textContent = paused ? 'resume' : 'pause';
-  button.title = paused ? 'Resume flight' : 'Pause flight';
+  button.title = paused ? 'Resume ride' : 'Pause ride';
   button.setAttribute('aria-pressed', String(paused));
   syncPlayback();
 }
@@ -3979,7 +3560,7 @@ document.addEventListener('visibilitychange', () => {
 });
 function dispose() {
   if (disposed) return disposalTask;
-  saveFlight();
+  saveRide();
   disposed = true;
   running = false;
   renderer.setAnimationLoop(null);
@@ -4001,7 +3582,7 @@ function dispose() {
     for (const pool of Object.values(speciesPools)) pool.map?.dispose();
     sun.shadow.dispose();
     scenePass.dispose();
-    glow.dispose();
+    glow?.dispose();
     display.dispose();
     softDisplay.dispose();
     post.dispose();
@@ -4010,7 +3591,7 @@ function dispose() {
   return disposalTask;
 }
 window.addEventListener('pagehide', (e) => {
-  saveFlight();
+  saveRide();
   if (e.persisted) {
     renderer.setAnimationLoop(null);
     audio.suspend(true);
@@ -4021,13 +3602,13 @@ window.addEventListener('pageshow', (e) => {
 });
 canvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
-  window.flightFailure();
+  window.rideFailure();
 });
 renderer.backend.device?.addEventListener('uncapturederror', () => {
-  if (!disposed) window.flightFailure();
+  if (!disposed) window.rideFailure();
 });
 renderer.backend.device?.lost.then((info) => {
-  if (!disposed && info.reason !== 'destroyed') window.flightFailure();
+  if (!disposed && info.reason !== 'destroyed') window.rideFailure();
 });
 
 // The gate. The world stands still behind Begin until the veil has lifted and
@@ -4046,7 +3627,7 @@ beginBtn.addEventListener('click', () => {
   const pauseButton = document.getElementById('pauseBtn');
   pauseButton.disabled = false;
   pauseButton.textContent = paused ? 'resume' : 'pause';
-  pauseButton.title = paused ? 'Resume flight' : 'Pause flight';
+  pauseButton.title = paused ? 'Resume ride' : 'Pause ride';
   pauseButton.setAttribute('aria-pressed', String(paused));
   canvas.inert = false;
   canvas.focus({ preventScroll: true });
@@ -4056,19 +3637,27 @@ beginBtn.addEventListener('click', () => {
   }, 1800);
 });
 // expose a little for review tooling
-window.__fly = {
+window.__ride = {
   state,
   cam,
+  views: VIEWS,
+  nextView,
   perf,
   trace,
   renderer,
   camera,
   moments,
   heightAt,
-  obstacleFloor,
   dispose,
   step: (dt) => advance(dt, false),
   capture,
+  lite: LITE,
+  world,
+  biomeWeights,
+  road,
+  ride: RIDE,
+  roadSpec: ROAD,
+  start: START,
   surface: {
     cell: CELL,
     size: N,
@@ -4082,12 +3671,12 @@ window.__fly = {
     water,
     species: speciesPools,
     props: Object.fromEntries(propPools.map((pool) => [pool.entry.id, pool.mesh])),
-    ruins: ruinPools,
+    sites: sitePools,
     grass,
     clouds,
     cloudSea,
     sky,
-    bird,
+    bike,
     companions,
     sun,
     groundShade: { map: aoMap, origin: aoOrigin.value, span: AO_SPAN },
@@ -4097,9 +3686,6 @@ window.__fly = {
   },
   set dayPhase(v) {
     dayPhase = ((v % 1) + 1) % 1;
-  },
-  set forceHigh(v) {
-    forceHigh = v;
   },
   get running() {
     return running;
@@ -4116,26 +3702,16 @@ window.__fly = {
   get masterGain() {
     return audio.gain;
   },
-  get clearance() {
-    return state.y - heightAt(state.x, state.z);
-  },
-  flight,
-  set forceLow(v) {
-    forceLow = v;
-  },
   get volume() {
     return audio.volume;
   },
   get muted() {
     return audio.muted;
   },
+  rpm: audio.rpm,
   seed,
   resumed,
-  sunward,
-  nightward,
-  galaxyHeading: GALAXY_HEADING,
   isNight,
-  aim: AIM,
   intro,
   opening: INTRO,
   title,
@@ -4146,47 +3722,34 @@ window.__fly = {
   solar,
   nightShare: NIGHT_SHARE,
   deck: DECK_Y,
-  get cloudCycle() {
-    return (((state.t - cloudOrigin) % 300) + 300) % 300;
-  },
   get dayRate() {
     return dayRate;
   },
   biomeAt,
-  snowLineAt: (x, z) => snowLineAt(fieldAt(x, z, 1), heightAt(x, z)),
-  terrainAhead,
-  climbAhead,
-  get plumes() {
-    return { count: plumes.count, summits: Array.from(plumes.geometry.attributes.base.array.slice(0, plumes.count * 3)) };
-  },
   treeCell: TREE_CELL,
   trees: treeRecords,
-  sites: ruinRecords,
+  sites: siteRecords,
   placed: propRecords,
   library: {
     swatches: SWATCH,
     biomes: BIOMES,
     species: SPECIES,
-    ruins: RUINS,
+    sites: SITES,
     props: PROPS,
     birds: BIRDS,
-    plumages: PLUMAGES,
-    markings: registry.markings,
+    paints: PAINTS,
     validate: () => validateLibrary(registry),
     validateBaked,
   },
   sky: { sun: _sunDir, moon: _moonDir, events: SKY_EVENTS, galaxy },
   begin: () => beginBtn.click(),
   renderStyle: 'soft',
-  birds: BIRDS.map((entry) => entry.id),
-  get bird() {
-    return birdKindId;
+  paints: PAINTS.map((entry) => entry.id),
+  get bikeTriangles() {
+    return bikeTriangles;
   },
-  setBird: setBirdKind,
-  plumages: PLUMAGES.map((p) => p.id),
-  variants: catalog.variants.map((v) => v.id),
-  get plumage() {
-    return plumageId;
+  get paint() {
+    return paintId;
   },
-  setPlumage: (plumage) => setBirdKind(birdKindId, plumage),
+  setPaint,
 };
