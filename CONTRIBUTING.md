@@ -81,7 +81,7 @@ Repeat with `webgl=1` and with seeds `0` and `4294967295`, then once on the bund
 
 ## Measuring what a change costs
 
-`?profile=1` arms the renderer's timestamp queries and a smoothed summary in `window.__ride.perf`. `tools/bench.js`, `tools/parity.js` and `tools/capture-launch-media.mjs` came with the engine and read `window.__ride`; their vantage points were written for a flying bird, so adapt them to the road before relying on them. `docs/perf-notes.md` records what the engine's frame costs and what was found; its snow and mountain sections describe the original engine's terrain, not this one.
+`?profile=1` arms the renderer's timestamp queries and a smoothed summary in `window.__ride.perf`. `tools/bench.js`, `tools/parity.js` and `tools/capture-launch-media.mjs` came with the engine and read `window.__ride`; the bench and parity tools hold the bike still on five stations (`dawn`, `noon`, `far`, `wide` at the far camera framing, and `night`), pinning its place, course and way along the road and the camera framing. `docs/perf-notes.md` records what the engine's frame costs and what was found; its numbers were measured with the original engine's bird vantages, and its snow and mountain sections describe the original engine's terrain, not this one.
 
 ## Publishing
 
