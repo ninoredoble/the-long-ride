@@ -307,8 +307,8 @@ const BIOMES = registry.biomes,
   SITES = registry.sites,
   PROPS = registry.props,
   BIRDS = registry.birds,
-  PAINTS = registry.paints,
-  PAINT = Object.fromEntries(PAINTS.map((entry) => [entry.id, entry]));
+  PAINTS = registry.paints.map((entry) => ({ ...entry, body: swatchColor(entry.body), trim: swatchColor(entry.trim) })),
+  PAINT = Object.assign(Object.create(null), Object.fromEntries(PAINTS.map((entry) => [entry.id, entry])));
 {
   const errors = validateLibrary(registry);
   if (errors.length) throw new Error('scenery library: ' + errors.join('; '));
@@ -1518,8 +1518,8 @@ const treeRecords = [];
 const TREE_CELL = 96;
 // Crown assignment margins: a ring rebuild happens at most one cell after the
 // bike crosses a cell, and the camera orbits at most CAMERA.maxDist from it.
-const NEAR_CROWN = 830,
-  FAR_CROWN = 400;
+const NEAR_CROWN = 850,
+  FAR_CROWN = 370;
 // The road keeps its verge clear: nothing stands within this of the asphalt's
 // edge, a tree by its trunk and crown.
 const VERGE = 4;
@@ -2665,7 +2665,7 @@ const cam = {
   yaw: 0, // orbit around the bike, relative to its heading; 0 is behind
   pitch: CAMERA.pitch,
   dist: CAMERA.dist,
-  lift: 0, // extra height that keeps the camera out of the ground
+  lift: 0, // extra height that keeps the camera out of the ground, canopies and roofs
   view: 0, // the framing last chosen, -1 once a drag has moved it
 };
 {
@@ -2674,7 +2674,13 @@ const cam = {
   cam.yaw = finite(orbit.yaw, -Math.PI, Math.PI) ?? cam.yaw;
   cam.pitch = finite(orbit.pitch, CAMERA.minPitch, CAMERA.maxPitch) ?? cam.pitch;
   cam.dist = finite(orbit.dist, CAMERA.minDist, CAMERA.maxDist) ?? cam.dist;
-  cam.view = finite(orbit.view, -1, VIEWS.length - 1) ?? 0;
+  cam.view = Number.isInteger(orbit.view) ? (finite(orbit.view, -1, VIEWS.length - 1) ?? 0) : 0;
+}
+function obstacleFloor(x, z) {
+  let floor = Math.max(SEA_LEVEL, heightAt(x, z));
+  for (const records of [treeRecords, siteRecords, propRecords])
+    for (const o of records) if ((o.x - x) ** 2 + (o.z - z) ** 2 < (o.radius + CAMERA.clearance) ** 2) floor = Math.max(floor, o.top);
+  return floor;
 }
 function updateCamera(dt) {
   const yaw = state.heading + Math.PI + cam.yaw,
@@ -2685,8 +2691,8 @@ function updateCamera(dt) {
     pivotY + Math.sin(cam.pitch) * cam.dist,
     state.z + Math.cos(yaw) * cp * cam.dist,
   );
-  // The ground lifts the camera quickly and lets it settle back slowly.
-  const floor = Math.max(SEA_LEVEL, heightAt(want.x, want.z));
+  // Ground, canopies and roofs lift the camera quickly and let it settle back slowly.
+  const floor = obstacleFloor(want.x, want.z);
   const lift = Math.max(0, floor + CAMERA.clearance - want.y);
   cam.lift += (lift - cam.lift) * Math.min(1, dt * (lift > cam.lift ? 12 : 1.5));
   want.y = Math.max(want.y + cam.lift, floor + 0.5);

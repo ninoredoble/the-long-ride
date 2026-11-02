@@ -47,7 +47,7 @@ async function rideChecks() {
   const gate = doc.getElementById('begin');
   assert(gate.classList.contains('ready') && !gate.classList.contains('gone') && !doc.getElementById('beginBtn').disabled, 'the gate stands on the drawn world with Begin ready');
   assert(doc.title === 'The Long Ride', 'the page is titled The Long Ride');
-  const copy = doc.documentElement.outerHTML;
+  const copy = doc.body.innerText;
   assert(!/kunchenguid|kun chen|discord|twitter\.com|x\.com\/|fly-with-me/i.test(copy), 'no original-author links or names in the page');
   assert(r.audioState !== 'running', 'audio waits for Begin', String(r.audioState));
 

@@ -18,18 +18,25 @@ async function parity(options = window.__parity || {}) {
   while (!window.__ride?.ready && !window.rideFailed && Date.now() < settle) await wait(50);
   const z = window.__ride;
   if (!z?.ready) throw new Error('the world did not open');
-  // A resumed flight starts somewhere else, so every vantage would be a
+  // A resumed ride starts somewhere else, so every vantage would be a
   // different scene; clear the page's memory and reload before measuring.
-  if (z.resumed) throw new Error('this world resumed a remembered flight; clear storage and reload');
+  if (z.resumed) throw new Error('this world resumed a remembered ride; clear storage and reload');
   const width = options.width ?? 384,
     height = options.height ?? 216,
     key = options.key ?? 'flyParity';
   // The world's own start, read before Begin: three hundred milliseconds of
-  // flight is already a different place, and the vantages are measured from it.
-  const start = { x: z.state.x, z: z.state.z, heading: z.state.heading };
+  // riding is already a different place, and the vantages are measured from it.
+  const start = { x: z.state.x, z: z.state.z, heading: z.state.heading, dir: z.state.dir };
+  // The bike stands still on the vantage: place, course and way along the road
+  // are put back every frame, and its height comes from the tyres as always.
+  const ride = (pin) => ({ x: pin.x, z: pin.z, heading: pin.heading, dir: pin.dir, speed: 0, yawRate: 0, lean: 0, steer: 0, nudgeYaw: 0, free: 0 });
+  const framing = (id = 'chase') => {
+    const view = z.views.find((v) => v.id === id);
+    return { yaw: view.yaw, pitch: view.pitch, dist: view.dist, lift: 0 };
+  };
   // The viewer's framing is remembered across visits, so put it back to the
   // default before measuring; otherwise a saved orbit moves every vantage.
-  Object.assign(z.cam, { yaw: 0, pitch: 0.3, dist: 17, lift: 0 });
+  Object.assign(z.cam, framing());
   if (!z.running) z.begin();
   await wait(300);
   if (z.paused) document.getElementById('pauseBtn').click();
@@ -40,28 +47,15 @@ async function parity(options = window.__parity || {}) {
   const cssWidth = window.innerWidth,
     cssHeight = window.innerHeight,
     ratio = renderer.getPixelRatio();
-  const deck = z.objects.cloudSea.position.y + 55;
   const pin = { on: false };
   const hold = () => {
     if (!pin.on) return;
-    z.state.x = pin.x;
-    z.state.z = pin.z;
-    z.state.y = pin.y;
-    z.state.heading = pin.heading;
-    z.state.vy = 0;
-    z.state.yawRate = 0;
-    z.state.flapping = false;
-    z.state.flapTimer = 0;
-    z.state.bank = 0;
-    z.state.pitch = 0;
-    // The wing beat keeps its own phase, outside the flight state.
-    Object.assign(z.objects.bird.userData, { phase: 0, flapAmp: 0.09 });
-    z.state.t = pin.t;
+    Object.assign(z.state, ride(pin), { odometer: 0, t: pin.t });
     z.dayPhase = pin.day;
     // The camera's lift out of the ground eases with the frame time, so a
     // sub-pixel of it survives any settling wait and lights up every leaf edge
     // in a comparison. Zero it: the clamp underneath is exact either way.
-    Object.assign(z.cam, { yaw: 0, pitch: 0.3, dist: 17, lift: 0 });
+    Object.assign(z.cam, framing(pin.view));
     requestAnimationFrame(hold);
   };
   // The pipeline sizes every one of its targets from the drawing buffer, so the
@@ -71,12 +65,12 @@ async function parity(options = window.__parity || {}) {
   z.camera.aspect = width / height;
   z.camera.updateProjectionMatrix();
   const target = new THREE.RenderTarget(width, height, { type: THREE.UnsignedByteType, depthBuffer: true });
-  const at = (dx, dz, extra) => ({ x: start.x + dx, z: start.z + dz, heading: start.heading, day: 0.5, t: 400, ...extra });
+  const at = (dx, dz, extra) => ({ x: start.x + dx, z: start.z + dz, heading: start.heading, dir: start.dir, day: 0.5, t: 400, ...extra });
   const places = {
     dawn: at(0, 0, { day: 0.262 }),
     noon: at(0, 0, {}),
     far: at(4200, -3100, {}),
-    above: at(0, 0, { deck: true }),
+    wide: at(0, 0, { view: 'far' }),
     night: at(0, 0, { day: 0 }),
   };
   const encode = async () => {
@@ -125,26 +119,21 @@ async function parity(options = window.__parity || {}) {
   };
   const shots = {};
   // The vantage stands still but the world is not frozen: ripples, cloud folds
-  // and the wing beat still move by the length of one frame between two reads.
+  // and the rider's sway still move by the length of one frame between two reads.
   // Two reads of the same build, moments apart, measure that floor, and no
   // comparison below it means anything.
   const noise = {};
   for (const [name, place] of Object.entries(places)) {
-    // Two steps: the heightfield only knows the ground under a place once it has
-    // streamed there, so arrive high, let it fill, then settle to the vantage.
-    Object.assign(pin, place, { y: 900, on: true });
-    z.forceHigh = !!place.deck;
-    z.forceLow = false;
+    // The heightfield, the tree rings and the grass window all rebuild after a
+    // jump; give them frames to arrive before reading.
+    Object.assign(pin, { view: undefined }, place, { on: true });
     hold();
-    await wait(1500);
-    pin.y = place.deck ? deck + 140 : Math.max(z.heightAt(place.x, place.z), 0) + 130;
-    await wait(2600);
+    await wait(4100);
     shots[name] = await encode();
     await wait(700);
     noise[name] = difference(shots[name], await encode());
   }
   pin.on = false;
-  z.forceHigh = false;
   target.dispose();
   renderer.setPixelRatio(ratio);
   renderer.setSize(cssWidth, cssHeight, false);

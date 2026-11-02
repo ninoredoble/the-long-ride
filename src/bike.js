@@ -374,7 +374,7 @@ export function animateBike(group, distance, motion = {}) {
   rig.lower.position.y = 0.012 + load + bump;
   rig.swing.rotation.x = (0.012 + load * 0.6 - bump * 0.8) / 0.52;
   rig.steer.rotation.y = Math.max(-0.3, Math.min(0.3, yawRate * 0.35)) + Math.sin(t * 1.7) * 0.004;
-  rig.rider.rotation.set(Math.sin(t * 1.3) * 0.012 + bump * 1.2, yawRate * 0.12, -lean * 0.3);
+  rig.rider.rotation.set(Math.sin(t * 1.3) * 0.012 + bump * 1.2, Math.max(-0.3, Math.min(0.3, yawRate * 0.35)) * 0.34, -lean * 0.3);
   rig.head.rotation.set(-0.12 - rig.rider.rotation.x, Math.max(-0.5, Math.min(0.5, yawRate * 0.9)), lean * 0.2);
   // arms: two bones to the grip, elbows out and down
   if (!tmp) {

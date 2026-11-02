@@ -12,8 +12,8 @@ The production implementation is `src/milky-way.js` with the shared extinction/l
 
 - Rebased onto the intro-polish and painterly-water changes on `main`.
 - `node tests/galaxy-checks.mjs`: deterministic, bounded, periodic and finite extinction/light, with color and contrast.
-- `tests/flight-checks.js`: 183 checks passed for source and bundle, seeds `42`, `0`, `4294967295`, on WebGPU and WebGL2.
-- `tests/night-checks.js`: 24 checks passed in the same 12 combinations. They read rendered pixels with and without the star catalog and atlas, verify night detail and pause stability, reject daylight and cloud-crossing leakage, and check fixed allocations and disposal.
+- `tests/flight-checks.js` (the original engine's, since removed): 183 checks passed for source and bundle, seeds `42`, `0`, `4294967295`, on WebGPU and WebGL2.
+- `tests/night-checks.js` (since removed): 24 checks passed in the same 12 combinations. They read rendered pixels with and without the star catalog and atlas, verify night detail and pause stability, reject daylight and cloud-crossing leakage, and check fixed allocations and disposal. The Long Ride's `tests/ride-checks.js` carries none of these, so the night sky is now verified by eye only, plus `node tests/galaxy-checks.mjs`.
 - No browser console errors in that matrix. Bundler freshness, JavaScript syntax, formatting of new files and diff whitespace checks passed.
 - Final production sky pixels matched the approved A5 screenshot exactly in the unobstructed upper-sky comparison region. Checked the live page at emulated `390 × 844` and `844 × 390` mobile viewports without overflow.
 - Fixed-view, 1440 × 900 WebGPU timing on the review machine: median whole-render GPU time across 20 warmed samples was about **29.6 ms**, versus **29.0 ms** for the previous sky. This is a local observation, not a frame-rate or physical-phone guarantee. One star draw is added at night; daylight and the opaque cloud deck skip it. Geometry, texture storage and per-frame work remain bounded.
