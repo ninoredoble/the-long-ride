@@ -2,7 +2,7 @@ async function bench(options = window.__bench || {}) {
   // A repeatable measurement of how hard the page works the machine. Runs in a
   // main-page tab opened with `?profile=1&seed=<n>`, on either backend, against
   // the source page or the bundle, and reads only what the running page reports:
-  // the raw frame trace (`__fly.trace`, armed by the same flag) and the
+  // the raw frame trace (`__ride.trace`, armed by the same flag) and the
   // renderer's own counters. Nothing here ships; the bundler folds `src/` and
   // `library/`, never `tools/`.
   //
@@ -27,8 +27,8 @@ async function bench(options = window.__bench || {}) {
   // is the check that the vantage really is the same scene.
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const settle = Date.now() + 30000;
-  while (!window.__fly?.ready && !window.flightFailed && Date.now() < settle) await wait(50);
-  const z = window.__fly;
+  while (!window.__ride?.ready && !window.rideFailed && Date.now() < settle) await wait(50);
+  const z = window.__ride;
   if (!z?.ready) throw new Error('the world did not open');
   // A resumed flight starts somewhere else, so every vantage would be a
   // different scene; clear the page's memory and reload before measuring.

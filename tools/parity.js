@@ -15,8 +15,8 @@ async function parity(options = window.__parity || {}) {
   // like `tools/bench.js`; the bundler folds `src/` and `library/`, never this.
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const settle = Date.now() + 30000;
-  while (!window.__fly?.ready && !window.flightFailed && Date.now() < settle) await wait(50);
-  const z = window.__fly;
+  while (!window.__ride?.ready && !window.rideFailed && Date.now() < settle) await wait(50);
+  const z = window.__ride;
   if (!z?.ready) throw new Error('the world did not open');
   // A resumed flight starts somewhere else, so every vantage would be a
   // different scene; clear the page's memory and reload before measuring.
