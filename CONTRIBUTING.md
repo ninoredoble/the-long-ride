@@ -59,7 +59,7 @@ Give `budget: { instances, triangles }` and, if the bike and the camera should k
 
 ## A paint
 
-`library/paints/<id>.js`: an `id`, a `name`, and two colors, `body` (tank, tail, fenders, helmet) and `trim` (stripes, rims), both inside the envelope. The corner control lists the registry's paints in order and the first is the bike a new visitor rides. The tile is drawn from the same two colors.
+`library/paints/<id>.js`: an `id`, a `name`, and two colors, `body` (tank, shrouds, panels, fenders, lamp cowl) and `trim` (helmet, stripes, shroud flashes, hub caps), both inside the envelope. The corner control lists the registry's paints in order and the first is the bike a new visitor rides. The tile is drawn from the same two colors.
 
 ## The bike
 

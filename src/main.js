@@ -2186,7 +2186,7 @@ cloudSea.renderOrder = 2;
 scene.add(cloudSea);
 
 // ---------------------------------------------------------------------------
-// The bike. src/bike.js lays out the GNEGR motorcycle and its rider in the
+// The bike. src/bike.js lays out the trail bike and its rider in the
 // colors of a paint from library/paints/; the engine makes the meshes, lights
 // them with its own soft material, measures the bike against its budget, and
 // spins the wheels. The viewer picks a paint in the corner, never before

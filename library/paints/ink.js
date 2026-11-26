@@ -1,6 +1,6 @@
 import { definePaint } from '../contract.js';
 
-// The logo's own: charcoal, with the signal orange on the tank's edge.
+// Charcoal, with signal orange trim.
 export default definePaint({
   id: 'ink',
   name: 'Ink',

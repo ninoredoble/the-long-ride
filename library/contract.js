@@ -186,8 +186,8 @@ export function colorProblem(value) {
  * @typedef {object} Paint One finish for the bike; the viewer picks one in the corner.
  * @property {string} id
  * @property {string} name What the corner control shows.
- * @property {SceneryColor} body The tank, the fairing and the tail.
- * @property {SceneryColor} trim The stripe, the wheels' rims and the seat's edge.
+ * @property {SceneryColor} body The tank, shrouds, panels, fenders and lamp cowl.
+ * @property {SceneryColor} trim The helmet, stripes, shroud flashes and hub caps.
  */
 
 export const defineBiome = (biome) => ({ kind: 'biome', ...biome });

@@ -31,7 +31,7 @@
 
 ## The world
 
-Four landscapes, mixed by a slow climate that wanders along the road: the **coast** (coconut palms, surf, jade water), the **rice terraces** (flooded and golden paddies stepping with the contours), the **pineapple plateau** (blue-green rows on red earth) and the **highland pines**, with banana groves, mango and rain trees, pasture, nipa huts, stone watchtowers and old churches seen from the road. Everything is generated from the seed on the viewer's machine; nothing is downloaded but Three.js.
+Four landscapes, mixed by a slow climate that wanders along the road: the **coast** (coconut palms, surf, jade water), the **rice terraces** (flooded and golden paddies stepping with the contours), the **pineapple plateau** (deep green rows on red earth) and the **highland pines**, with banana groves, mango and rain trees, pasture, nipa huts, stone watchtowers and old churches seen from the road. Everything is generated from the seed on the viewer's machine; nothing is downloaded but Three.js.
 
 ## Read on
 

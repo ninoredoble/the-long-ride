@@ -1,7 +1,7 @@
 import { defineBiome } from '../contract.js';
 
 // The wet forest of the foothills: tall lauan over rain trees and mango,
-// banana in the clearings, the deepest greens, thick undergrowth.
+// banana in the clearings, the deepest greens.
 export default defineBiome({
   id: 'forest',
   name: 'Lowland forest',

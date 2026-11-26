@@ -24,7 +24,8 @@ export const BIKE = {
 };
 
 // Fixed finishes: rubber, metal, the engine, the rider's gear. Only the body
-// (tank, shrouds, panels, fenders, helmet) and the trim change with the paint.
+// (tank, shrouds, panels, fenders, lamp cowl) and the trim (helmet, stripes,
+// shroud flashes, hub caps) change with the paint.
 const FIXED = {
   tyre: 0x2f2e2c,
   knob: 0x353431,
