@@ -2684,10 +2684,13 @@ const cam = {
 {
   // the viewer's framing is theirs across visits and worlds
   const orbit = storedSettings.camera ?? {};
-  cam.yaw = finite(orbit.yaw, -Math.PI, Math.PI) ?? cam.yaw;
-  cam.pitch = finite(orbit.pitch, CAMERA.minPitch, CAMERA.maxPitch) ?? cam.pitch;
-  cam.dist = finite(orbit.dist, CAMERA.minDist, CAMERA.maxDist) ?? cam.dist;
-  cam.view = Number.isInteger(orbit.view) ? (finite(orbit.view, -1, VIEWS.length - 1) ?? 0) : 0;
+  const view = VIEWS.findIndex((v) => v.id === orbit.view);
+  if (view >= 0 || orbit.view === 'free') {
+    cam.yaw = finite(orbit.yaw, -Math.PI, Math.PI) ?? cam.yaw;
+    cam.pitch = finite(orbit.pitch, CAMERA.minPitch, CAMERA.maxPitch) ?? cam.pitch;
+    cam.dist = finite(orbit.dist, CAMERA.minDist, CAMERA.maxDist) ?? cam.dist;
+    cam.view = view;
+  }
 }
 function obstacleFloor(x, z) {
   let floor = Math.max(SEA_LEVEL, heightAt(x, z));
@@ -3014,7 +3017,7 @@ function saveSettings() {
   remember.write(SETTINGS_KEY, {
     volume: audio.volume,
     muted: audio.muted,
-    camera: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist, view: cam.view },
+    camera: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist, view: VIEWS[cam.view]?.id ?? 'free' },
     paint: paintId,
   });
 }
