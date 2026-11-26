@@ -63,7 +63,7 @@ Give `budget: { instances, triangles }` and, if the bike and the camera should k
 
 ## The bike
 
-`src/bike.js` is the bike kit, drawn after the GNEGR logo: lofted tank, tail and helmet, swept frame and limbs, wheels with painted rims. It describes the bike as a tree of hinged nodes (swingarm, fork, wheels, rider, head, arms); `animateBike` spins the wheels, works the suspension, steers the bars, leans the rider and reaches each arm to its grip. The whole bike and rider stay under `BIKE.triangles`, which the engine measures on the first build of each paint.
+`src/bike.js` is the bike kit, a Mindanao trail bike: lofted tank, shrouds, seat and helmet, swept frame, fork and limbs, knobby tyres on spoked rims, a high front fender, an upswept pipe and a rear rack; the rider sits up in a rain jacket. It describes the bike as a tree of hinged nodes (swingarm, fork, wheels, rider, head, arms); `animateBike` spins the wheels, works the suspension, steers the bars, leans the rider and reaches each arm to its grip. The whole bike and rider stay under `BIKE.triangles`, which the engine measures on the first build of each paint.
 
 ## Checking changes
 

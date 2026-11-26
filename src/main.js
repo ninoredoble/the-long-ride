@@ -1732,8 +1732,9 @@ function placeTrees(bx, bz) {
         const sc = (spec.scale[0] + us * (spec.scale[1] - spec.scale[0])) * (0.62 + 0.38 * sstep(ROAD.shoulder + VERGE, 48, Math.abs(roadSide(px, pz)))),
           tall = sc * (0.9 + uz * 0.4),
           angle = ux * 6.283;
-        // a crown may lean over the verge, a trunk may not stand in it
-        if (Math.abs(roadSide(px, pz)) < ROAD.shoulder + VERGE + sc * pool.radius * 0.35) continue;
+        // no crown hangs over the road or its verge: the chase camera rides
+        // above the road and lifts over any canopy it would be inside
+        if (Math.abs(roadSide(px, pz)) < ROAD.shoulder + VERGE + sc * pool.radius * 0.9) continue;
         _q.setFromAxisAngle(_v3.set(0, 1, 0), angle);
         _m4.compose(_v3.set(px, h, pz), _q, _s3.set(sc, tall, sc));
         pool.wood.setMatrixAt(pool.count, _m4);

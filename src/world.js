@@ -42,13 +42,15 @@ export function createWorld(seed) {
     S3 = hash2(seed, 3, 0x5e6f) & 0xffff,
     S4 = hash2(seed, 4, 0x7a8b) & 0xffff;
 
-  // The meander: kilometre sweeps, a few hundred meters of bend, and tight
-  // turns where the land is rough. Tangents stay under about sixty degrees.
+  // The meander: kilometre sweeps, a few hundred meters of bend, and a little
+  // play where the land is rough. Tangents stay under about sixty degrees. The
+  // finest term stays small: the road is stored as 16 m straight rows, and a
+  // tight wiggle shows its corners as jogs in the painted lines.
   function roadX(z) {
     return (
       1700 * fbm(z / 5200 + 3.7, 0.31, S4, 2) +
       150 * fbm(z / 620 - 1.9, 4.2, S4 + 9, 2) +
-      22 * fbm(z / 170 + 7.3, 9.1, S4 + 17, 1)
+      7 * fbm(z / 170 + 7.3, 9.1, S4 + 17, 1)
     );
   }
 
