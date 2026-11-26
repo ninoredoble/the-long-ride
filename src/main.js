@@ -772,21 +772,12 @@ scene.add(sky);
 // ---------------------------------------------------------------------------
 // The approved illustrated response: broad diffuse groups, no specular lobe.
 // ---------------------------------------------------------------------------
-// `neutral` (0..1) drains the hue from the light a surface takes, keeping its
-// brightness: the asphalt dims in a low sun without turning its colour.
 class SoftIllustratedLighting extends THREE.LightingModel {
-  constructor(neutral = null) {
-    super();
-    this.neutral = neutral;
-  }
-  tone(light) {
-    return this.neutral ? mix(light, vec3(dot(light, vec3(0.2126, 0.7152, 0.0722))), this.neutral) : light;
-  }
   direct({ lightDirection, lightColor, reflectedLight }) {
     const nl = dot(normalView, lightDirection);
     const bands = mix(0.18, 0.72, smoothstep(-0.18, 0.15, nl)).add(smoothstep(0.5, 0.85, nl).mul(0.15));
     reflectedLight.directDiffuse.addAssign(
-      this.tone(lightColor)
+      lightColor
         .mul(mix(max(nl, 0), bands, 0.65))
         .mul(diffuseColor.rgb)
         .mul(1 / Math.PI),
@@ -794,7 +785,7 @@ class SoftIllustratedLighting extends THREE.LightingModel {
   }
   indirect(builder) {
     const { irradiance, ambientOcclusion, reflectedLight } = builder.context;
-    reflectedLight.indirectDiffuse.addAssign(this.tone(irradiance).mul(diffuseColor.rgb).mul(1 / Math.PI));
+    reflectedLight.indirectDiffuse.addAssign(irradiance.mul(diffuseColor.rgb).mul(1 / Math.PI));
     reflectedLight.indirectDiffuse.mulAssign(ambientOcclusion);
   }
 }
@@ -804,7 +795,7 @@ function litMaterial(colorNode, opts = {}) {
   const compressed = pow(max(base.rgb, vec3(0.0001)), vec3(LOOK.materialPow)).mul(0.94);
   const value = dot(compressed, vec3(0.2126, 0.7152, 0.0722));
   m.colorNode = vec4(mix(compressed, vec3(value), LOOK.materialGray), base.a);
-  m.setupLightingModel = () => new SoftIllustratedLighting(opts.neutral);
+  m.setupLightingModel = () => new SoftIllustratedLighting();
   m.receivedShadowNode = receiveSoftShadow;
   if (opts.emissiveNode) m.emissiveNode = opts.emissiveNode.mul(0.25);
   return m;
@@ -845,9 +836,8 @@ const K = (hex) => {
   return vec3(c.r, c.g, c.b);
 };
 // The road's paint and the headlight's pool. The asphalt is a cool grey, a
-// little patched, and takes the light nearly colourless under a low sun, so it
-// does not turn red; the lines are a worn paper white and fade with distance
-// before they could shimmer.
+// little patched, so low gold light warms it instead of turning it red; the
+// lines are a worn paper white and fade with distance before they could shimmer.
 const ROAD_PAINT = {
   asphalt: K(0x535650),
   patch: K(0x484b46),
@@ -1041,11 +1031,6 @@ let terrainMat;
   // Shore masks use the actual fragment height, never interpolated corner colors.
   terrainMat = litMaterial(painted.mul(brush), {
     emissiveNode: painted.mul(ROAD_PAINT.lamp).mul(pool).mul(5),
-    // from golden light through twilight; noon and night keep their own cast
-    neutral: asphalt
-      .mul(float(1).sub(smoothstep(0.35, 0.65, uSunDir.y)))
-      .mul(float(1).sub(uNight))
-      .mul(0.85),
   });
   terrainMat.positionNode = vec3(positionLocal.x, hv, positionLocal.z);
   terrainMat.normalNode = transformNormalToView(varying(surfaceNormal).normalize());
@@ -2666,7 +2651,7 @@ const CAMERA = {
   // the frame and the bike is a small traveller in it (the close chase is a
   // press of C away).
   dist: 68,
-  pitch: 0.42, // elevation above the bike, radians
+  pitch: 0.5, // elevation above the bike, radians
   minDist: 3,
   maxDist: 70,
   minPitch: -0.12,
@@ -2676,14 +2661,14 @@ const CAMERA = {
   // Far framings look past the bike toward the horizon, so the frame is a third
   // sky and the bike rides in its lower third; close ones look at the rider.
   // Metres ahead per metre of camera distance beyond `aheadFrom`.
-  aheadFrom: 23,
-  ahead: 2.4,
+  aheadFrom: 12,
+  ahead: 1.1,
   clearance: 0.8,
 };
 // The camera control's framings: the vista (the default), behind, beside,
 // ahead looking back, the drone overhead, and far off across the country.
 const VIEWS = [
-  { id: 'vista', yaw: 0, pitch: 0.42, dist: 68 },
+  { id: 'vista', yaw: 0, pitch: 0.5, dist: 68 },
   { id: 'chase', yaw: 0, pitch: 0.2, dist: 6.5 },
   { id: 'side', yaw: 1.3, pitch: 0.1, dist: 6 },
   { id: 'ahead', yaw: 2.8, pitch: 0.12, dist: 8 },
