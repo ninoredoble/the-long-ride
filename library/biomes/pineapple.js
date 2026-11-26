@@ -1,8 +1,8 @@
 import { defineBiome } from '../contract.js';
 
-// The plateau's pineapple fields: blue-green rows on red earth, each field
-// ploughed its own way, some freshly cleared, a rain tree left standing here
-// and there for shade.
+// The plateau's pineapple fields: deep green rows on red earth, each field
+// ploughed its own way, some freshly cleared, rain trees and mango left
+// standing for shade.
 export default defineBiome({
   id: 'pineapple',
   name: 'Pineapple plateau',
@@ -15,9 +15,10 @@ export default defineBiome({
     field: 'soilRed',
   },
   species: {
-    raintree: 1,
+    raintree: 0.7,
+    mango: 0.4,
   },
-  density: 0.08,
+  density: 0.4,
   grass: {
     tint: 'grassCool',
     density: 0.2,

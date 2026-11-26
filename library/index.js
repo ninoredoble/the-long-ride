@@ -40,4 +40,4 @@ export const props = [boulders, hut];
 // The flock that crosses the road now and then.
 export const birds = [egret];
 // The first paint is the bike a new visitor rides; the corner control lists this order.
-export const paints = [ink, signal, paper, jade, mangoPaint, laterite, pinePaint, dusk];
+export const paints = [laterite, signal, ink, paper, jade, mangoPaint, pinePaint, dusk];

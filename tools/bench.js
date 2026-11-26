@@ -71,7 +71,7 @@ async function bench(options = window.__bench || {}) {
     return { yaw: view.yaw, pitch: view.pitch, dist: view.dist, lift: 0 };
   };
   // The viewer's framing is remembered across visits, so put it back to the
-  // default before measuring; otherwise a saved orbit moves every vantage.
+  // chase framing before measuring; otherwise a saved orbit moves every vantage.
   Object.assign(z.cam, framing());
   if (!z.running) z.begin();
   await wait(300);

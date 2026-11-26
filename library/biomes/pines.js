@@ -14,10 +14,10 @@ export default defineBiome({
   species: {
     pine: 1,
   },
-  density: 0.9,
+  density: 1.1,
   grass: {
     tint: 'grassCool',
-    density: 0.9,
+    density: 0.6,
   },
   props: {
     boulders: 0.15,

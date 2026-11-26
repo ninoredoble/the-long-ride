@@ -59,11 +59,11 @@ Give `budget: { instances, triangles }` and, if the bike and the camera should k
 
 ## A paint
 
-`library/paints/<id>.js`: an `id`, a `name`, and two colors, `body` (tank, tail, fenders, helmet) and `trim` (stripes, rims), both inside the envelope. The corner control lists the registry's paints in order and the first is the bike a new visitor rides. The tile is drawn from the same two colors.
+`library/paints/<id>.js`: an `id`, a `name`, and two colors, `body` (tank, shrouds, panels, fenders, lamp cowl) and `trim` (helmet, stripes, shroud flashes, hub caps), both inside the envelope. The corner control lists the registry's paints in order and the first is the bike a new visitor rides. The tile is drawn from the same two colors.
 
 ## The bike
 
-`src/bike.js` is the bike kit, drawn after the GNEGR logo: lofted tank, tail and helmet, swept frame and limbs, wheels with painted rims. It describes the bike as a tree of hinged nodes (swingarm, fork, wheels, rider, head, arms); `animateBike` spins the wheels, works the suspension, steers the bars, leans the rider and reaches each arm to its grip. The whole bike and rider stay under `BIKE.triangles`, which the engine measures on the first build of each paint.
+`src/bike.js` is the bike kit, a Mindanao trail bike: lofted tank, shrouds, seat and helmet, swept frame, fork and limbs, knobby tyres on spoked rims, a high front fender, an upswept pipe and a rear rack; the rider sits up in a rain jacket. It describes the bike as a tree of hinged nodes (swingarm, fork, wheels, rider, head, arms); `animateBike` spins the wheels, works the suspension, steers the bars, leans the rider and reaches each arm to its grip. The whole bike and rider stay under `BIKE.triangles`, which the engine measures on the first build of each paint.
 
 ## Checking changes
 

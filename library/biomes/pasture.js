@@ -1,7 +1,7 @@
 import { defineBiome } from '../contract.js';
 
-// Open cogon hills: rolling grassland gone gold in patches, a few rain trees
-// and mango on the ridges, stones in the grass.
+// Open cogon hills: rolling olive grassland, groves of rain tree and mango,
+// stones in the grass.
 export default defineBiome({
   id: 'pasture',
   name: 'Cogon hills',
@@ -16,10 +16,10 @@ export default defineBiome({
     mango: 0.4,
     pine: 0.2,
   },
-  density: 0.25,
+  density: 0.85,
   grass: {
-    tint: 'grassGold',
-    density: 1,
+    tint: 'grassCool',
+    density: 0.7,
   },
   props: {
     boulders: 0.3,

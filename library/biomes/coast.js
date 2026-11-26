@@ -1,6 +1,6 @@
 import { defineBiome } from '../contract.js';
 
-// The hot coast: coconut groves over pale grass, banana by the houses, the
+// The hot coast: coconut groves over muted grass, banana by the houses, the
 // sea a shore's width off the road. Where the road starts most mornings.
 // climate is temperature, moisture, region, each 0..1; colors are swatch
 // names or hex values inside the swatch envelope; species and props are
@@ -17,11 +17,12 @@ export default defineBiome({
   species: {
     coconut: 1,
     banana: 0.25,
-    mango: 0.12,
+    mango: 0.3,
+    raintree: 0.2,
   },
   density: 0.9,
   grass: {
-    tint: 'grassGold',
+    tint: 'grassCool',
     density: 0.7,
   },
   props: {

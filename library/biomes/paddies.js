@@ -1,7 +1,8 @@
 import { defineBiome } from '../contract.js';
 
 // Rice terraces: paddies stepped along the contours, some flooded and holding
-// the sky, some green, some gold, with a coconut or a banana on the bunds.
+// the sky, some green, some gold, with groves of coconut, mango, rain tree
+// and banana between them.
 // On gentle ground the paddies are wide; on slopes they crowd into terraces.
 export default defineBiome({
   id: 'paddies',
@@ -16,12 +17,14 @@ export default defineBiome({
   },
   species: {
     coconut: 0.6,
-    banana: 0.5,
+    banana: 0.35,
+    mango: 0.5,
+    raintree: 0.3,
   },
-  density: 0.22,
+  density: 0.6,
   grass: {
-    tint: 'white',
-    density: 0.35,
+    tint: 'grassCool',
+    density: 0.3,
   },
   props: {
     hut: 0.35,
