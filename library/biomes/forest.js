@@ -19,8 +19,8 @@ export default defineBiome({
   },
   density: 1.35,
   grass: {
-    tint: 'white',
-    density: 0.85,
+    tint: 'grassCool',
+    density: 0.6,
   },
   props: {
     boulders: 0.2,

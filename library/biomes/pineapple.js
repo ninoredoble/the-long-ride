@@ -15,9 +15,10 @@ export default defineBiome({
     field: 'soilRed',
   },
   species: {
-    raintree: 1,
+    raintree: 0.7,
+    mango: 0.4,
   },
-  density: 0.08,
+  density: 0.4,
   grass: {
     tint: 'grassCool',
     density: 0.2,

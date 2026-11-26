@@ -16,10 +16,10 @@ export default defineBiome({
     mango: 0.4,
     pine: 0.2,
   },
-  density: 0.25,
+  density: 0.85,
   grass: {
-    tint: 'grassGold',
-    density: 1,
+    tint: 'grassCool',
+    density: 0.7,
   },
   props: {
     boulders: 0.3,

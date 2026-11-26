@@ -16,12 +16,14 @@ export default defineBiome({
   },
   species: {
     coconut: 0.6,
-    banana: 0.5,
+    banana: 0.35,
+    mango: 0.5,
+    raintree: 0.3,
   },
-  density: 0.22,
+  density: 0.6,
   grass: {
-    tint: 'white',
-    density: 0.35,
+    tint: 'grassCool',
+    density: 0.3,
   },
   props: {
     hut: 0.35,

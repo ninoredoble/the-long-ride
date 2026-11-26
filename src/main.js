@@ -839,9 +839,9 @@ const K = (hex) => {
 // little patched, so low gold light warms it instead of turning it red; the
 // lines are a worn paper white and fade with distance before they could shimmer.
 const ROAD_PAINT = {
-  asphalt: K(0x51575e),
-  patch: K(0x464b51),
-  gravel: K(0x8d8a7e),
+  asphalt: K(0x535650),
+  patch: K(0x484b46),
+  gravel: K(0x857e64),
   line: K(0xd8d3c4),
   dash: 9, // meters of dash and gap along z
   lamp: K(0xffe2a8),
@@ -952,7 +952,7 @@ let terrainMat;
       edge = max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5)));
     const id = hash(band.floor().mul(17.3).add(plot.x.floor().mul(3.1)).add(plot.y.floor().mul(7.9)));
     const bund = max(smoothstep(0.86, 0.95, ring), smoothstep(0.46, 0.49, edge)).mul(near);
-    return { flooded: step(id, 0.38), gold: step(0.82, id), bund };
+    return { flooded: step(id, 0.16), gold: step(0.82, id), bund };
   })();
   const rows = (() => {
     const plot = xz.div(120),
@@ -961,7 +961,8 @@ let terrainMat;
       angle = r.mul(Math.PI);
     const dir = vec2(cos(angle), sin(angle));
     const stripe = sin(dot(xz, dir).mul(Math.PI * 2 / 1.7));
-    const plants = mix(float(0.62), smoothstep(-0.35, 0.35, stripe), float(1).sub(smoothstep(40, 160, distance)));
+    // rows only up close: 1.7 m stripes seen from farther alias into broad bands
+    const plants = mix(float(0.62), smoothstep(-0.35, 0.35, stripe), float(1).sub(smoothstep(12, 45, distance)));
     const lane = smoothstep(0.47, 0.495, max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5))));
     const cleared = step(0.86, hash(id.x.mul(4.1).add(id.y.mul(9.7)).add(3)));
     const young = step(0.62, r);
@@ -983,7 +984,7 @@ let terrainMat;
         pattern = BIOMES[i].ground.pattern;
       let own = mix(u.base, u.alt, macro);
       if (pattern === 'terraces') {
-        const water = mix(u.field, uHorizon, 0.3);
+        const water = mix(u.field, uHorizon, 0.1);
         own = mix(mix(u.base, u.alt, terraces.gold), water, terraces.flooded);
         own = mix(own, u.base.mul(0.78), terraces.bund);
       } else if (pattern === 'rows') own = mix(own, u.field, rows.mul(0.6));
@@ -1726,7 +1727,9 @@ function placeTrees(bx, bz) {
         }
         const pool = speciesPools[speciesIds[chosen]],
           spec = pool.spec;
-        const sc = spec.scale[0] + us * (spec.scale[1] - spec.scale[0]),
+        // trees close to the road stand a little smaller, so the corridor the
+        // camera looks along stays open while the groves beyond stay full
+        const sc = (spec.scale[0] + us * (spec.scale[1] - spec.scale[0])) * (0.62 + 0.38 * sstep(ROAD.shoulder + VERGE, 48, Math.abs(roadSide(px, pz)))),
           tall = sc * (0.9 + uz * 0.4),
           angle = ux * 6.283;
         // a crown may lean over the verge, a trunk may not stand in it
@@ -2646,7 +2649,7 @@ const CAMERA = {
   // the frame and the bike is a small traveller in it (the close chase is a
   // press of C away).
   dist: 68,
-  pitch: 0.4, // elevation above the bike, radians
+  pitch: 0.5, // elevation above the bike, radians
   minDist: 3,
   maxDist: 70,
   minPitch: -0.12,
@@ -2663,7 +2666,7 @@ const CAMERA = {
 // The camera control's framings: the vista (the default), behind, beside,
 // ahead looking back, the drone overhead, and far off across the country.
 const VIEWS = [
-  { id: 'vista', yaw: 0.18, pitch: 0.4, dist: 68 },
+  { id: 'vista', yaw: 0, pitch: 0.5, dist: 68 },
   { id: 'chase', yaw: 0, pitch: 0.2, dist: 6.5 },
   { id: 'side', yaw: 1.3, pitch: 0.1, dist: 6 },
   { id: 'ahead', yaw: 2.8, pitch: 0.12, dist: 8 },

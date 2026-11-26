@@ -17,7 +17,8 @@ export default defineBiome({
   species: {
     coconut: 1,
     banana: 0.25,
-    mango: 0.12,
+    mango: 0.3,
+    raintree: 0.2,
   },
   density: 0.9,
   grass: {

@@ -18,14 +18,14 @@ export const CELL = 16; // terrain sample spacing, meters
 // height, so their tops wear the clouds.
 export const PEAKS = { cell: 2600, radius: 950, power: 1.45, lift: 520, massif: 420 };
 export const ROAD = {
-  lane: 1.85, // the bike rides this far right of the centre line
-  half: 3.6, // the asphalt, either side of the centre
-  shoulder: 5.2, // gravel to here
+  lane: 1.5, // the bike rides this far right of the centre line
+  half: 3.0, // the asphalt, either side of the centre: a provincial two-lane
+  shoulder: 4.1, // a thin earth shoulder to here, then grass
   flat: 15, // the carved bench is level to here
   bank: 85, // and blends back into the land by here
   smooth: 16, // rows either side the grade is averaged over, two rows apart
   floor: 3.5, // the lowest the road runs, over the sea it skirts
-  calm: [260, 1500], // the range rises back to full height over this distance
+  calm: [200, 1000], // the range rises back to full height over this distance
   shore: [160, 700], // and the sea keeps at least this far off
 };
 // Temperature is mostly height: the coast is hot, the plateau warm, the
@@ -128,9 +128,12 @@ export function createWorld(seed) {
     // country and the pine highlands
     const plateau = sstep(0.42, 0.72, fbm(x / 9000 - 4.4, z / 9000 + 2.6, S3 + 53, 2) * 0.5 + 0.5) * 300 * landMask;
     const calm = sstep(ROAD.calm[0], ROAD.calm[1], d);
-    const hills = fbm(wx / 520, wz / 520, S1 + 11, 4) * (0.55 + 0.45 * sstep(60, ROAD.calm[0], d));
-    const mountainMask = sstep(0.56, 0.82, cont) * calm;
-    let h = -70 + 150 * landMask + plateau + hills * (10 + 38 * landMask);
+    const hills = fbm(wx / 520, wz / 520, S1 + 11, 4) * (0.45 + 0.55 * sstep(40, ROAD.calm[0], d));
+    // broad rolling country that rises away from the road, so the road runs
+    // along valleys and the land has relief from the saddle and the vista alike
+    const swell = (fbm(wx / 1700 - 6.1, wz / 1700 + 3.9, S1 + 71, 3) * 0.5 + 0.5) * 120 * landMask * sstep(60, 650, d);
+    const mountainMask = sstep(0.52, 0.8, cont) * calm;
+    let h = -70 + 150 * landMask + plateau + swell + hills * (14 + 52 * landMask);
     if (mountainMask > 0) {
       const rx = wx + 260 * fbm(wx / 900 + 3.3, wz / 900 - 1.1, S1 + 29, 2),
         rz = wz + 260 * fbm(wx / 900 - 2.2, wz / 900 + 4.4, S1 + 31, 2);
