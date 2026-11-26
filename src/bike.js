@@ -351,16 +351,16 @@ export function buildBike(paint, kit) {
 
   // a plain full-face helmet in the trim color, a dark visor, nothing else
   const helmet = loft([
-    { z: -0.16, y: 0.0, rx: 0.02, ry: 0.02 },
+    { z: -0.16, y: 0.0, rx: 0, ry: 0 },
     { z: -0.12, y: 0.01, rx: 0.105, ry: 0.115 },
     { z: -0.02, y: 0.02, rx: 0.135, ry: 0.15 },
     { z: 0.09, y: 0.0, rx: 0.13, ry: 0.14 },
     { z: 0.17, y: -0.03, rx: 0.1, ry: 0.105 },
-    { z: 0.205, y: -0.05, rx: 0.035, ry: 0.045 },
+    { z: 0.205, y: -0.05, rx: 0, ry: 0 },
   ], {
     around: 12,
     along: 8,
-    paintAt: (q) => (q.z > 0.04 && q.sy > -0.3 && q.sy < 0.45 && Math.abs(q.cx) < 0.86 ? color(FIXED.visor) : trim),
+    paintAt: (q) => (q.z > 0.12 && q.sy > -0.3 ? color(FIXED.visor) : trim),
   });
   const headGeometry = build([part(helmet)]);
 

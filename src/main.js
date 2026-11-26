@@ -950,21 +950,22 @@ let terrainMat;
       ring = fract(band);
     const plot = xz.add(vec2(mx_noise_float(xz.mul(0.02)).mul(6), mx_noise_float(xz.mul(0.02).add(9)).mul(6))).div(38),
       edge = max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5)));
-    const id = hash(band.floor().mul(17.3).add(plot.x.floor().mul(3.1)).add(plot.y.floor().mul(7.9)));
+    // hash() reads its seed as unsigned: every negative one would collapse to hash(0)
+    const id = hash(abs(band.floor().mul(17.3).add(plot.x.floor().mul(3.1)).add(plot.y.floor().mul(7.9))));
     const bund = max(smoothstep(0.86, 0.95, ring), smoothstep(0.46, 0.49, edge)).mul(near);
     return { flooded: step(id, 0.16), gold: step(0.82, id), bund };
   })();
   const rows = (() => {
     const plot = xz.div(120),
       id = plot.floor(),
-      r = hash(id.x.mul(12.9).add(id.y.mul(78.2))),
+      r = hash(abs(id.x.mul(12.9).add(id.y.mul(78.2)))),
       angle = r.mul(Math.PI);
     const dir = vec2(cos(angle), sin(angle));
     const stripe = sin(dot(xz, dir).mul(Math.PI * 2 / 1.7));
     // rows only up close: 1.7 m stripes seen from farther alias into broad bands
     const plants = mix(float(0.62), smoothstep(-0.35, 0.35, stripe), float(1).sub(smoothstep(12, 45, distance)));
     const lane = smoothstep(0.47, 0.495, max(abs(fract(plot.x).sub(0.5)), abs(fract(plot.y).sub(0.5))));
-    const cleared = step(0.86, hash(id.x.mul(4.1).add(id.y.mul(9.7)).add(3)));
+    const cleared = step(0.86, hash(abs(id.x.mul(4.1).add(id.y.mul(9.7)).add(3))));
     const young = step(0.62, r);
     return float(1).sub(plants.mul(mix(1, 0.55, young))).max(cleared).max(lane).clamp(0, 1);
   })();
