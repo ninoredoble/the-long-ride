@@ -14,7 +14,7 @@ import { Color, SRGBColorSpace, LinearSRGBColorSpace } from 'three';
 // ---------------------------------------------------------------------------
 export const SWATCH = {
   // ground
-  meadow: 0x7caa48,
+  meadow: 0x66844a,
   forest: 0x618a43,
   mossDeep: 0x4f7a3e,
   steppe: 0x9aa658,
@@ -33,16 +33,16 @@ export const SWATCH = {
   amber: 0xb8a457,
   leafLitter: 0xa58f55,
   paleGreen: 0x9db668,
-  coastGrass: 0x95b25c,
-  sandGrass: 0xb8b67c,
-  paddy: 0x8cbb4c,
-  paddyGold: 0xc0b25a,
+  coastGrass: 0x627f47,
+  sandGrass: 0x8a8f60,
+  paddy: 0x5c8240,
+  paddyGold: 0x8a8f55,
   paddyWater: 0x86aea6,
-  pineapple: 0x7f9c7c,
-  pineappleDeep: 0x6c8d70,
+  pineapple: 0x6e8f6b,
+  pineappleDeep: 0x5a7b5c,
   soilRed: 0xa06a4e,
-  cogon: 0xb2ad66,
-  highland: 0x6f9a52,
+  cogon: 0x7d8650,
+  highland: 0x4d6e42,
   // rock and stone
   rock: 0x8a9179,
   rockCold: 0x7b8a88,

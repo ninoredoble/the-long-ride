@@ -21,7 +21,7 @@ export default defineBiome({
   },
   density: 0.9,
   grass: {
-    tint: 'grassGold',
+    tint: 'grassCool',
     density: 0.7,
   },
   props: {

@@ -835,14 +835,14 @@ const K = (hex) => {
   const c = C(hex);
   return vec3(c.r, c.g, c.b);
 };
-// The road's paint and the headlight's pool. The asphalt is a warm grey, a
-// little patched; the lines are a worn paper white and fade with distance
-// before they could shimmer.
+// The road's paint and the headlight's pool. The asphalt is a cool grey, a
+// little patched, so low gold light warms it instead of turning it red; the
+// lines are a worn paper white and fade with distance before they could shimmer.
 const ROAD_PAINT = {
-  asphalt: K(0x5f5d58),
-  patch: K(0x4f4e4b),
-  gravel: K(0x948b78),
-  line: K(0xe6e0d0),
+  asphalt: K(0x51575e),
+  patch: K(0x464b51),
+  gravel: K(0x8d8a7e),
+  line: K(0xd8d3c4),
   dash: 9, // meters of dash and gap along z
   lamp: K(0xffe2a8),
 };
@@ -2642,19 +2642,28 @@ window.addEventListener('keydown', (e) => {
 // it is put.
 // ---------------------------------------------------------------------------
 const CAMERA = {
-  dist: 6.5,
-  pitch: 0.2, // elevation above the bike, radians
+  // The opening framing is the vista: high and well back, so the land fills
+  // the frame and the bike is a small traveller in it (the close chase is a
+  // press of C away).
+  dist: 68,
+  pitch: 0.4, // elevation above the bike, radians
   minDist: 3,
   maxDist: 70,
   minPitch: -0.12,
   maxPitch: 1.3,
   turnPerPixel: 0.004,
   lookRise: 1.0, // aim at the rider's shoulders, so the bike sits a little below center
+  // Far framings look past the bike toward the horizon, so the frame is a third
+  // sky and the bike rides in its lower third; close ones look at the rider.
+  // Metres ahead per metre of camera distance beyond `aheadFrom`.
+  aheadFrom: 12,
+  ahead: 1.1,
   clearance: 0.8,
 };
-// The camera control's framings: behind, beside, ahead looking back, the
-// drone overhead, and far off across the country.
+// The camera control's framings: the vista (the default), behind, beside,
+// ahead looking back, the drone overhead, and far off across the country.
 const VIEWS = [
+  { id: 'vista', yaw: 0.18, pitch: 0.4, dist: 68 },
   { id: 'chase', yaw: 0, pitch: 0.2, dist: 6.5 },
   { id: 'side', yaw: 1.3, pitch: 0.1, dist: 6 },
   { id: 'ahead', yaw: 2.8, pitch: 0.12, dist: 8 },
@@ -2662,7 +2671,7 @@ const VIEWS = [
   { id: 'far', yaw: -1.0, pitch: 0.3, dist: 62 },
 ];
 const cam = {
-  yaw: 0, // orbit around the bike, relative to its heading; 0 is behind
+  yaw: VIEWS[0].yaw, // orbit around the bike, relative to its heading; 0 is behind
   pitch: CAMERA.pitch,
   dist: CAMERA.dist,
   lift: 0, // extra height that keeps the camera out of the ground, canopies and roofs
@@ -2697,7 +2706,15 @@ function updateCamera(dt) {
   cam.lift += (lift - cam.lift) * Math.min(1, dt * (lift > cam.lift ? 12 : 1.5));
   want.y = Math.max(want.y + cam.lift, floor + 0.5);
   camera.position.copy(want);
-  camera.lookAt(state.x, pivotY, state.z);
+  // Look ahead along the camera's own line to the bike, so an orbit still
+  // swings around the bike and only the aim moves forward.
+  const ahead = Math.max(0, cam.dist - CAMERA.aheadFrom) * CAMERA.ahead;
+  let fx = state.x - want.x,
+    fz = state.z - want.z;
+  const flat = Math.hypot(fx, fz) || 1;
+  fx /= flat;
+  fz /= flat;
+  camera.lookAt(state.x + fx * ahead, pivotY, state.z + fz * ahead);
 }
 
 // ---------------------------------------------------------------------------
